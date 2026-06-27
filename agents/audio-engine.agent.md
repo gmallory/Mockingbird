@@ -9,10 +9,21 @@
 You are the Audio Engine Agent for Mockingbird. Your responsibility is building the core real-time audio processing pipeline that runs in the browser. This is the most performance-critical component of the entire application. Every millisecond matters. Your code runs on the audio rendering thread and must be zero-allocation, lock-free, and bulletproof.
 
 > **Why this is the only non-Python code in the project:** the Web Audio API and `AudioWorkletProcessor`
-> run exclusively in the browser and have no Python binding. This module is therefore plain JavaScript
-> (ES modules) — the minimal client-side glue. It is loaded as a static asset by the Python frontend
-> (`frontend/static/js/audio-engine/`, served by FastAPI). Keep it lean; no Node build step, no npm, no
-> TypeScript toolchain — author it as plain JS that runs directly in the browser.
+> run exclusively in the browser and have no Python binding. This module is therefore JavaScript — the
+> minimal client-side glue, loaded as a static asset by the Python frontend
+> (`frontend/static/js/audio-engine/`, served by FastAPI). Author it as plain `.js` (ES modules) that runs
+> directly in the browser: **no Node build step and no TypeScript *emit* step** on the serving path, so the
+> files FastAPI ships are exactly the files you wrote. AudioWorklet processors in particular are fetched by
+> URL via `audioContext.audioWorklet.addModule(url)` and must be real `.js`. This keeps the project on a
+> single toolchain (uv) with no npm/`node_modules` in dev, CI, or Docker.
+>
+> **Type safety without a build step (recommended):** this is the most correctness-sensitive code in the
+> system — ring-buffer index math, `SharedArrayBuffer`/`Atomics` byte offsets, Float32↔Int16 conversion, and
+> the WS control-message contract shared with the gateway. Get type checking *without compiling* by
+> annotating the plain `.js` with JSDoc and enabling `// @ts-check` per file (or a `jsconfig.json` with
+> `"checkJs": true`). The editor — and optionally a dev-only `tsc --noEmit` in CI — type-checks the source
+> while the shipped artifact stays plain JS. The prohibition is on a TypeScript *compile/emit* pipeline,
+> React, or any client framework here — **not** on types themselves.
 
 ---
 
@@ -24,7 +35,8 @@ You are the Audio Engine Agent for Mockingbird. Your responsibility is building 
 | **AudioWorkletProcessor** | Real-time audio capture and playback (dedicated thread) |
 | **SharedArrayBuffer** | Zero-copy audio data sharing between threads |
 | **Web Workers** | WebSocket connection management off main thread |
-| **JavaScript (ES modules)** | Plain browser JS — no build step, served as static assets by FastAPI |
+| **JavaScript (ES modules)** | Plain browser JS — no build/emit step, served as static assets by FastAPI |
+| **JSDoc + `// @ts-check`** | Type checking with no compile step — shipped files stay plain `.js` |
 
 ---
 
@@ -384,12 +396,15 @@ frontend/static/js/audio-engine/
 ## Testing Strategy
 
 ### Automated Tests
+- Type check: `tsc --noEmit` over the JSDoc-annotated `.js` (dev/CI only — no emit, no shipped artifact)
 - Unit tests for RingBuffer (push/pull, wraparound, overflow, underflow)
 - Unit tests for audio conversion utils (Float32↔Int16, RMS)
 - Integration test: AudioEngine lifecycle (init → start → stop → dispose)
 
 > Browser-JS unit tests run in a headless browser (e.g. via pytest-playwright driving a test page), so the
-> audio engine stays testable without introducing a separate Node/npm toolchain.
+> audio engine stays testable without a separate Node/npm *runtime* toolchain. The optional `tsc --noEmit`
+> type check is the one dev-only Node tool that may run in CI; it never produces a build artifact — the
+> served files remain the hand-written `.js`.
 
 ### Manual Tests
 - **Latency test**: Measure mic-to-speaker roundtrip with a click/clap
