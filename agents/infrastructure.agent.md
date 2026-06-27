@@ -184,7 +184,7 @@ services:
       - "3000:3000"
     environment:
       - PUBLIC_API_URL=http://localhost:3001
-      - PUBLIC_WS_URL=ws://localhost:3001
+      - PUBLIC_WS_URL=ws://localhost:3001/ws/voice
     depends_on:
       - gateway
 ```
@@ -234,7 +234,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 # Download base models (HuBERT, Silero VAD, etc.)
 COPY scripts/download_models.py scripts/
-RUN python3 scripts/download_models.py
+RUN uv run python scripts/download_models.py
 
 COPY . .
 
@@ -530,7 +530,7 @@ PROMETHEUS_PORT=9090
 
 # === FRONTEND ===
 PUBLIC_API_URL=http://localhost:3001
-PUBLIC_WS_URL=ws://localhost:3001
+PUBLIC_WS_URL=ws://localhost:3001/ws/voice
 ```
 
 ---
