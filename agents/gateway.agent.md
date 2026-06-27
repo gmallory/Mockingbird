@@ -278,6 +278,7 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID, uuid4
 
+from sqlalchemy import JSON
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -318,7 +319,7 @@ class User(SQLModel, table=True):
     plan: Plan = Plan.FREE
     monthly_minutes_used: float = 0.0
     twilio_phone_number: str | None = None
-    settings: dict = Field(default_factory=dict, sa_type="JSON")
+    settings: dict = Field(default_factory=dict, sa_type=JSON)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
