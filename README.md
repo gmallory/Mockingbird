@@ -38,7 +38,7 @@ Mockingbird is a web application that captures your speech, transforms it into a
 ┌──────────────────────────────────────────────────┐
 │              BROWSER (Client)                     │
 │                                                   │
-│  Next.js UI ◄──► Audio Engine ◄──► WS Worker     │
+│  FastAPI UI ◄──► Audio Engine ◄──► WS Worker     │
 │                  (AudioWorklet)     (Binary PCM)  │
 │                  + Ring Buffer      + Opus        │
 │                  + VAD              + Reconnect   │
@@ -47,7 +47,7 @@ Mockingbird is a web application that captures your speech, transforms it into a
 ┌──────────────────────▼───────────────────────────┐
 │              EDGE GPU SERVER                      │
 │                                                   │
-│  Node.js Gateway ──gRPC──► FastAPI ML Service    │
+│  FastAPI Gateway ─gRPC──► FastAPI ML Service     │
 │  (WebSocket mgmt,          (RVC / OpenVoice,     │
 │   auth, routing)            ONNX Runtime GPU,    │
 │                             Silero VAD,          │
@@ -73,21 +73,21 @@ Mockingbird is a web application that captures your speech, transforms it into a
 ## 🛠️ Tech Stack
 
 ### Frontend
-- **Next.js 15** (React 19) — Application framework
-- **TypeScript** — Type safety
-- **Web Audio API** — AudioWorklet for real-time processing
-- **Twilio Client SDK** — WebRTC-to-PSTN calling
-- **Zustand** — State management
-- **D3.js** — Audio visualizations
+- **FastAPI + Jinja2 + HTMX** — Server-rendered UI (Python)
+- **Uvicorn** — ASGI server
+- **Web Audio API** — AudioWorklet for real-time processing (minimal browser JS glue)
+- **Twilio Python SDK + Voice JS SDK** — WebRTC-to-PSTN calling
+- **Redis** — Server-side session/UI state
+- **Canvas API** — Audio visualizations
 
 ### Backend — Gateway
-- **Node.js** (Fastify) — WebSocket management, auth, routing
+- **Python 3.14** (FastAPI) — WebSocket management, auth, routing
 - **Redis** — Sessions, pub/sub, model routing
 - **PostgreSQL** — Users, voice models, call history
 - **S3 / GCS** — Audio samples, model weights
 
 ### Backend — ML Inference
-- **Python 3.12** (FastAPI) — ML service orchestration
+- **Python 3.14** (FastAPI) — ML service orchestration
 - **RVC** — Core real-time voice conversion (MIT license)
 - **OpenVoice v2** — Zero-shot instant cloning (Apache 2.0)
 - **GPT-SoVITS** — Alternative zero-shot cloning (MIT)
@@ -112,43 +112,38 @@ Mockingbird/
 ├── docs/
 │   └── PRODUCT_SPEC.md          # Full product specification
 │
-├── frontend/                     # Next.js web application
-│   ├── src/
-│   │   ├── app/                  # Next.js app router pages
-│   │   │   ├── page.tsx          # Landing / Dashboard
-│   │   │   ├── studio/           # Voice Studio (train & manage)
-│   │   │   ├── dialer/           # Phone dialer & calling
-│   │   │   ├── monitor/          # Live audio monitor
-│   │   │   └── settings/         # User settings
-│   │   ├── components/           # React components
-│   │   │   ├── AudioVisualizer/
-│   │   │   ├── Dialer/
-│   │   │   ├── VoiceCard/
-│   │   │   └── WaveformDisplay/
-│   │   ├── lib/
-│   │   │   ├── audio-engine/     # Core audio processing (vanilla TS)
-│   │   │   │   ├── AudioEngine.ts
-│   │   │   │   ├── processors/
-│   │   │   │   │   ├── voice-capture.worklet.ts
-│   │   │   │   │   └── voice-playback.worklet.ts
-│   │   │   │   ├── WebSocketWorker.ts
-│   │   │   │   └── RingBuffer.ts
-│   │   │   ├── twilio/           # Twilio calling integration
-│   │   │   └── api/              # API client
-│   │   ├── hooks/                # React hooks
-│   │   └── stores/               # Zustand stores
-│   ├── public/
-│   ├── package.json
-│   └── next.config.js
+├── frontend/                     # FastAPI + Jinja2 + HTMX web application
+│   ├── app/
+│   │   ├── main.py               # FastAPI app + Uvicorn entrypoint
+│   │   ├── routes/               # Page routes (dashboard, studio, dialer, monitor, settings)
+│   │   ├── state.py              # Server-side UI state (Pydantic, Redis-backed)
+│   │   └── events.py             # SSE endpoints for live audio metrics
+│   ├── templates/                # Jinja2 templates
+│   │   ├── base.html
+│   │   ├── app_shell.html
+│   │   ├── pages/                # dashboard, studio, dialer, monitor, settings
+│   │   └── components/           # voice_card, audio_visualizer, dial_pad, ...
+│   ├── static/
+│   │   ├── css/                  # Theme + component styles
+│   │   └── js/audio-engine/      # Minimal browser glue (the only non-Python code)
+│   │       ├── audio-engine.js
+│   │       ├── ring-buffer.js
+│   │       ├── websocket-worker.js
+│   │       └── processors/
+│   │           ├── voice-capture.worklet.js
+│   │           └── voice-playback.worklet.js
+│   ├── pyproject.toml
+│   └── uv.lock
 │
-├── gateway/                      # Node.js WebSocket gateway
-│   ├── src/
-│   │   ├── server.ts             # Fastify server
+├── gateway/                      # Python (FastAPI) WebSocket gateway
+│   ├── app/
+│   │   ├── main.py               # FastAPI app + Uvicorn entrypoint
 │   │   ├── websocket/            # WS connection management
 │   │   ├── auth/                 # JWT authentication
-│   │   ├── routing/              # Model routing & load balancing
-│   │   └── middleware/           # Rate limiting, logging
-│   ├── package.json
+│   │   ├── inference/            # Model routing & load balancing
+│   │   └── rate_limit/           # Rate limiting, logging
+│   ├── pyproject.toml
+│   ├── uv.lock
 │   └── Dockerfile
 │
 ├── inference/                    # Python ML inference service
@@ -170,9 +165,9 @@ Mockingbird/
 │   │       ├── voice_stream.py   # WebSocket streaming endpoint
 │   │       ├── voices.py         # Voice model CRUD
 │   │       └── training.py       # Training job management
-│   ├── requirements.txt
-│   ├── Dockerfile.gpu
-│   └── pyproject.toml
+│   ├── pyproject.toml
+│   ├── uv.lock
+│   └── Dockerfile.gpu
 │
 ├── infrastructure/               # Deployment & infrastructure
 │   ├── docker-compose.yml        # Local development
@@ -202,8 +197,8 @@ Mockingbird/
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Node.js 20+
-- Python 3.12+
+- Python 3.14+
+- [uv](https://docs.astral.sh/uv/) (package manager)
 - Docker & Docker Compose
 - NVIDIA GPU with CUDA 12+ (for local inference)
 - Twilio account (for PSTN calling)
@@ -224,18 +219,18 @@ docker compose -f docker-compose.gpu.yml up -d
 
 # 4. Start the frontend
 cd frontend
-npm install
-npm run dev
+uv sync
+uv run uvicorn app.main:app --reload --port 3000
 
 # 5. Start the gateway
 cd ../gateway
-npm install
-npm run dev
+uv sync
+uv run uvicorn app.main:app --reload --port 3001
 
 # 6. Start the inference service (requires GPU)
 cd ../inference
-pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
+uv sync
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 ```
 
 ### Quick Start (CPU-only / Cloud API Fallback)
@@ -243,7 +238,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 ```bash
 # For development without a local GPU, use Cartesia API as the inference backend
 docker compose up -d  # Starts Redis + PostgreSQL only
-INFERENCE_BACKEND=cartesia npm run dev  # Frontend with cloud API fallback
+INFERENCE_BACKEND=cartesia uv run uvicorn app.main:app --reload  # Frontend with cloud API fallback
 ```
 
 ---
@@ -263,9 +258,9 @@ This project includes agent configuration files in the `agents/` directory that 
 | Agent | Scope | File |
 |-------|-------|------|
 | **Orchestrator** | Full project coordination | `AGENTS.md` |
-| **Frontend** | Next.js UI, components, pages | `frontend.agent.md` |
+| **Frontend** | FastAPI + Jinja2 + HTMX UI, templates, pages | `frontend.agent.md` |
 | **Audio Engine** | Web Audio API, AudioWorklet, WebSocket streaming | `audio-engine.agent.md` |
-| **Gateway** | Node.js WebSocket gateway, auth, routing | `gateway.agent.md` |
+| **Gateway** | Python (FastAPI) WebSocket gateway, auth, routing | `gateway.agent.md` |
 | **Inference** | Python ML service, RVC/OpenVoice, training pipeline | `inference.agent.md` |
 | **Infrastructure** | Docker, K8s, CI/CD, monitoring | `infrastructure.agent.md` |
 

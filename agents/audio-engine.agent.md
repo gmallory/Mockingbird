@@ -8,6 +8,12 @@
 
 You are the Audio Engine Agent for Mockingbird. Your responsibility is building the core real-time audio processing pipeline that runs in the browser. This is the most performance-critical component of the entire application. Every millisecond matters. Your code runs on the audio rendering thread and must be zero-allocation, lock-free, and bulletproof.
 
+> **Why this is the only non-Python code in the project:** the Web Audio API and `AudioWorkletProcessor`
+> run exclusively in the browser and have no Python binding. This module is therefore plain JavaScript
+> (ES modules) — the minimal client-side glue. It is loaded as a static asset by the Python frontend
+> (`frontend/static/js/audio-engine/`, served by FastAPI). Keep it lean; no Node build step, no npm, no
+> TypeScript toolchain — author it as plain JS that runs directly in the browser.
+
 ---
 
 ## Tech Stack
@@ -18,19 +24,19 @@ You are the Audio Engine Agent for Mockingbird. Your responsibility is building 
 | **AudioWorkletProcessor** | Real-time audio capture and playback (dedicated thread) |
 | **SharedArrayBuffer** | Zero-copy audio data sharing between threads |
 | **Web Workers** | WebSocket connection management off main thread |
-| **TypeScript** | Type safety (compiled to vanilla JS for worklets) |
+| **JavaScript (ES modules)** | Plain browser JS — no build step, served as static assets by FastAPI |
 
 ---
 
 ## Architecture
 
 ```
-                         Main Thread (React)
+                    Main Thread (browser JS)
                               │
                     ┌─────────┴──────────┐
                     │                    │
               AudioEngine          UI Events
-              (TypeScript)         (React Hooks)
+              (plain JS module)    (FastAPI-served page)
                     │
         ┌───────────┼───────────┐
         │           │           │
@@ -55,54 +61,53 @@ You are the Audio Engine Agent for Mockingbird. Your responsibility is building 
 
 ### AudioEngine (Main Thread Orchestrator)
 
-```typescript
+```javascript
+// audio-engine.js
 class AudioEngine {
-  private audioContext: AudioContext;
-  private captureWorklet: AudioWorkletNode;
-  private playbackWorklet: AudioWorkletNode;
-  private wsWorker: Worker;
-  private outboundRingBuffer: SharedRingBuffer;
-  private inboundRingBuffer: SharedRingBuffer;
-  
+  // Fields (assigned in initialize()):
+  //   audioContext, captureWorklet, playbackWorklet, wsWorker,
+  //   outboundRingBuffer, inboundRingBuffer
+
   // Lifecycle
-  async initialize(config: AudioEngineConfig): Promise<void>;
-  async start(modelId: string): Promise<void>;
-  async stop(): Promise<void>;
-  async dispose(): Promise<void>;
-  
+  async initialize(config) {}      // config: see AudioEngineConfig below
+  async start(modelId) {}
+  async stop() {}
+  async dispose() {}
+
   // Model management
-  async switchModel(modelId: string): Promise<void>;
-  
+  async switchModel(modelId) {}
+
   // Controls
-  setTransformEnabled(enabled: boolean): void;
-  setPitchOffset(semitones: number): void;
-  setSpeedFactor(factor: number): void;
-  
+  setTransformEnabled(enabled) {}
+  setPitchOffset(semitones) {}
+  setSpeedFactor(factor) {}
+
   // Metrics
-  getLatency(): number;
-  getInputLevel(): number;
-  getOutputLevel(): number;
-  getConnectionStatus(): ConnectionStatus;
-  
-  // Events
-  on(event: 'latency' | 'level' | 'connection' | 'error', handler: Function): void;
-  off(event: string, handler: Function): void;
+  getLatency() {}
+  getInputLevel() {}
+  getOutputLevel() {}
+  getConnectionStatus() {}
+
+  // Events ('latency' | 'level' | 'connection' | 'error')
+  on(event, handler) {}
+  off(event, handler) {}
 }
 ```
 
 ### AudioEngineConfig
 
-```typescript
-interface AudioEngineConfig {
-  sampleRate: 16000 | 44100 | 48000;  // Default: 48000
-  chunkSizeMs: 20;                      // 20ms chunks
-  websocketUrl: string;                 // wss://edge.mockingbird.app/ws/voice
-  inputDeviceId?: string;               // Specific mic device
-  outputDeviceId?: string;              // Specific speaker device
-  enableNoiseSuppression: boolean;
-  enableEchoCancellation: boolean;
-  enableAutoGainControl: boolean;
-}
+```javascript
+// Plain config object passed to AudioEngine.initialize()
+const config = {
+  sampleRate: 48000,                // 16000 | 44100 | 48000 (default: 48000)
+  chunkSizeMs: 20,                  // 20ms chunks
+  websocketUrl: "wss://edge.mockingbird.app/ws/voice",
+  inputDeviceId: undefined,         // optional specific mic device
+  outputDeviceId: undefined,        // optional specific speaker device
+  enableNoiseSuppression: true,
+  enableEchoCancellation: true,
+  enableAutoGainControl: true,
+};
 ```
 
 ---
@@ -111,33 +116,28 @@ interface AudioEngineConfig {
 
 ### VoiceCaptureProcessor
 
-```typescript
-// processors/voice-capture.worklet.ts
-// Compiled to plain JS — NO imports, NO allocations in process()
+```javascript
+// processors/voice-capture.worklet.js
+// Plain JS — NO imports, NO allocations in process()
 
 class VoiceCaptureProcessor extends AudioWorkletProcessor {
-  private buffer: Float32Array;
-  private bufferIndex: number;
-  private chunkSize: number;  // 960 samples at 48kHz = 20ms
-  private isActive: boolean;
-  
-  constructor(options: AudioWorkletNodeOptions) {
+  constructor(options) {
     super();
-    this.chunkSize = options.processorOptions?.chunkSize || 960;
+    this.chunkSize = options.processorOptions?.chunkSize || 960; // 960 samples @48kHz = 20ms
     this.buffer = new Float32Array(this.chunkSize);
     this.bufferIndex = 0;
     this.isActive = true;
-    
+
     this.port.onmessage = (e) => {
       if (e.data.type === 'stop') this.isActive = false;
       if (e.data.type === 'start') this.isActive = true;
     };
   }
-  
-  process(inputs: Float32Array[][], outputs: Float32Array[][], parameters: Record<string, Float32Array>): boolean {
+
+  process(inputs, outputs, parameters) {
     const input = inputs[0]?.[0];
     if (!input || !this.isActive) return true;
-    
+
     // Accumulate 128-sample quanta into chunkSize-sample frames
     for (let i = 0; i < input.length; i++) {
       this.buffer[this.bufferIndex++] = input[i];
@@ -149,7 +149,7 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
         this.bufferIndex = 0;
       }
     }
-    
+
     return true; // Keep processor alive
   }
 }
@@ -159,24 +159,18 @@ registerProcessor('voice-capture', VoiceCaptureProcessor);
 
 ### VoicePlaybackProcessor
 
-```typescript
-// processors/voice-playback.worklet.ts
+```javascript
+// processors/voice-playback.worklet.js
 
 class VoicePlaybackProcessor extends AudioWorkletProcessor {
-  private ringBuffer: Float32Array;
-  private readIndex: number;
-  private writeIndex: number;
-  private bufferSize: number;
-  private isActive: boolean;
-  
-  constructor(options: AudioWorkletNodeOptions) {
+  constructor(options) {
     super();
     this.bufferSize = options.processorOptions?.bufferSize || 4800; // 100ms buffer
     this.ringBuffer = new Float32Array(this.bufferSize);
     this.readIndex = 0;
     this.writeIndex = 0;
     this.isActive = true;
-    
+
     this.port.onmessage = (e) => {
       if (e.data.type === 'audio') {
         this.writeToBuffer(e.data.data);
@@ -185,18 +179,18 @@ class VoicePlaybackProcessor extends AudioWorkletProcessor {
       if (e.data.type === 'start') this.isActive = true;
     };
   }
-  
-  private writeToBuffer(data: Float32Array): void {
+
+  writeToBuffer(data) {
     for (let i = 0; i < data.length; i++) {
       this.ringBuffer[this.writeIndex] = data[i];
       this.writeIndex = (this.writeIndex + 1) % this.bufferSize;
     }
   }
-  
-  process(inputs: Float32Array[][], outputs: Float32Array[][], parameters: Record<string, Float32Array>): boolean {
+
+  process(inputs, outputs, parameters) {
     const output = outputs[0]?.[0];
     if (!output || !this.isActive) return true;
-    
+
     for (let i = 0; i < output.length; i++) {
       if (this.readIndex !== this.writeIndex) {
         output[i] = this.ringBuffer[this.readIndex];
@@ -205,7 +199,7 @@ class VoicePlaybackProcessor extends AudioWorkletProcessor {
         output[i] = 0; // Silence when buffer is empty (underrun)
       }
     }
-    
+
     return true;
   }
 }
@@ -219,36 +213,33 @@ registerProcessor('voice-playback', VoicePlaybackProcessor);
 
 For production, replace `postMessage` with a lock-free SPSC ring buffer using `SharedArrayBuffer` and `Atomics`:
 
-```typescript
-// lib/audio-engine/RingBuffer.ts
+```javascript
+// ring-buffer.js
 
 class SharedRingBuffer {
-  private buffer: Float32Array;     // Backed by SharedArrayBuffer
-  private state: Int32Array;        // [readIndex, writeIndex, capacity]
-  
-  constructor(capacity: number) {
+  constructor(capacity) {
     const sab = new SharedArrayBuffer(capacity * 4 + 12);
-    this.buffer = new Float32Array(sab, 12, capacity);
-    this.state = new Int32Array(sab, 0, 3);
+    this.buffer = new Float32Array(sab, 12, capacity);   // backed by SharedArrayBuffer
+    this.state = new Int32Array(sab, 0, 3);              // [readIndex, writeIndex, capacity]
     this.state[2] = capacity;
   }
-  
+
   // Called by PRODUCER (capture worklet or WebSocket worker)
-  push(data: Float32Array): number { /* ... */ }
-  
+  push(data) { /* ... */ }
+
   // Called by CONSUMER (WebSocket worker or playback worklet)
-  pull(output: Float32Array): number { /* ... */ }
-  
+  pull(output) { /* ... */ }
+
   // Available samples to read
-  get available(): number { /* ... */ }
-  
+  get available() { /* ... */ }
+
   // Get the underlying SharedArrayBuffer for transfer
-  get sharedBuffer(): SharedArrayBuffer { /* ... */ }
+  get sharedBuffer() { /* ... */ }
 }
 ```
 
 **Requirements for SharedArrayBuffer:**
-- Server must send COOP/COEP headers:
+- The FastAPI frontend must send COOP/COEP headers on the page response:
   ```
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
@@ -258,11 +249,13 @@ class SharedRingBuffer {
 
 ## WebSocket Worker
 
-```typescript
-// lib/audio-engine/WebSocketWorker.ts
+```javascript
+// websocket-worker.js
 // Runs in a dedicated Web Worker — manages the WebSocket connection
 
-self.onmessage = (e: MessageEvent) => {
+let ws;
+
+self.onmessage = (e) => {
   switch (e.data.type) {
     case 'connect':
       connect(e.data.url, e.data.modelId, e.data.sampleRate);
@@ -279,10 +272,10 @@ self.onmessage = (e: MessageEvent) => {
   }
 };
 
-function connect(url: string, modelId: string, sampleRate: number) {
-  const ws = new WebSocket(url);
+function connect(url, modelId, sampleRate) {
+  ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';
-  
+
   ws.onopen = () => {
     // Send configuration
     ws.send(JSON.stringify({
@@ -292,7 +285,7 @@ function connect(url: string, modelId: string, sampleRate: number) {
     }));
     self.postMessage({ type: 'connected' });
   };
-  
+
   ws.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
       // Binary frame — transformed audio
@@ -304,7 +297,7 @@ function connect(url: string, modelId: string, sampleRate: number) {
       self.postMessage({ type: 'control', data: msg });
     }
   };
-  
+
   ws.onerror = () => self.postMessage({ type: 'error' });
   ws.onclose = () => {
     self.postMessage({ type: 'disconnected' });
@@ -313,7 +306,7 @@ function connect(url: string, modelId: string, sampleRate: number) {
   };
 }
 
-function sendAudio(data: Float32Array) {
+function sendAudio(data) {
   // Convert Float32 to Int16 for bandwidth efficiency
   const int16 = new Int16Array(data.length);
   for (let i = 0; i < data.length; i++) {
@@ -372,19 +365,18 @@ function sendAudio(data: Float32Array) {
 ## Files to Create
 
 ```
-frontend/src/lib/audio-engine/
-├── AudioEngine.ts              # Main orchestrator class
-├── RingBuffer.ts               # SharedArrayBuffer SPSC ring buffer
-├── WebSocketWorker.ts          # Web Worker for WebSocket management
+frontend/static/js/audio-engine/
+├── audio-engine.js             # Main orchestrator class
+├── ring-buffer.js              # SharedArrayBuffer SPSC ring buffer
+├── websocket-worker.js         # Web Worker for WebSocket management
 ├── processors/
-│   ├── voice-capture.worklet.ts    # Capture AudioWorkletProcessor
-│   └── voice-playback.worklet.ts   # Playback AudioWorkletProcessor
+│   ├── voice-capture.worklet.js    # Capture AudioWorkletProcessor
+│   └── voice-playback.worklet.js   # Playback AudioWorkletProcessor
 ├── utils/
-│   ├── audio-utils.ts          # Float32↔Int16 conversion, RMS calculation
-│   ├── vad.ts                  # Simple energy-based VAD for browser
-│   └── metrics.ts              # Latency tracking, level metering
-├── types.ts                    # AudioEngine types and interfaces
-└── index.ts                    # Public API exports
+│   ├── audio-utils.js          # Float32↔Int16 conversion, RMS calculation
+│   ├── vad.js                  # Simple energy-based VAD for browser
+│   └── metrics.js              # Latency tracking, level metering
+└── index.js                    # Public API exports
 ```
 
 ---
@@ -395,6 +387,9 @@ frontend/src/lib/audio-engine/
 - Unit tests for RingBuffer (push/pull, wraparound, overflow, underflow)
 - Unit tests for audio conversion utils (Float32↔Int16, RMS)
 - Integration test: AudioEngine lifecycle (init → start → stop → dispose)
+
+> Browser-JS unit tests run in a headless browser (e.g. via pytest-playwright driving a test page), so the
+> audio engine stays testable without introducing a separate Node/npm toolchain.
 
 ### Manual Tests
 - **Latency test**: Measure mic-to-speaker roundtrip with a click/clap

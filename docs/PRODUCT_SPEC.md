@@ -49,8 +49,8 @@ The heart of Mockingbird — transforms live speech into a target voice with <30
 │                    BROWSER (Client)                          │
 │                                                              │
 │  ┌────────────┐   ┌────────────────┐   ┌────────────────┐   │
-│  │ React UI   │   │  Audio Engine  │   │  WebSocket     │   │
-│  │ (Next.js)  │◄─►│  (Vanilla TS)  │◄─►│  Worker        │   │
+│  │ FastAPI UI │   │  Audio Engine  │   │  WebSocket     │   │
+│  │ +Jinja/HTMX│◄─►│  (Vanilla JS)  │◄─►│  Worker        │   │
 │  │            │   │                │   │                │   │
 │  │ • Controls │   │ • AudioWorklet │   │ • Binary PCM   │   │
 │  │ • Viz      │   │ • Ring Buffer  │   │ • Opus codec   │   │
@@ -65,7 +65,7 @@ The heart of Mockingbird — transforms live speech into a target voice with <30
 │                    EDGE GPU SERVER                            │
 │                                                              │
 │  ┌───────────────┐         ┌──────────────────────────┐     │
-│  │ Node.js       │  gRPC   │  Python (FastAPI)         │     │
+│  │ Python        │  gRPC   │  Python (FastAPI)         │     │
 │  │ Gateway       │────────►│  ML Inference Service     │     │
 │  │               │         │                          │     │
 │  │ • WebSocket   │         │  ┌──────────────────┐    │     │
@@ -207,19 +207,19 @@ Mockingbird supports multiple audio routing strategies for different use cases:
 ### Frontend
 | Technology | Purpose |
 |-----------|---------|
-| **Next.js 15** (React 19) | Application framework, SSR, routing, API routes |
-| **TypeScript** | Type safety across the codebase |
-| **Web Audio API** | AudioWorklet for real-time audio processing |
+| **FastAPI + Jinja2 + HTMX** (Python) | Server-rendered UI, routing, page handlers |
+| **Uvicorn** | ASGI server |
+| **Web Audio API** | AudioWorklet for real-time audio processing (minimal browser JS glue) |
 | **SharedArrayBuffer** | Zero-copy audio data sharing between threads |
 | **WebSocket (binary)** | Streaming audio to/from inference server |
-| **Twilio Client SDK** | WebRTC-to-PSTN calling integration |
-| **D3.js / Canvas API** | Waveform and spectrogram visualizations |
-| **Zustand** | Lightweight state management |
+| **Twilio Python SDK + Voice JS SDK** | WebRTC-to-PSTN calling integration |
+| **Canvas API** | Waveform and spectrogram visualizations |
+| **Redis (server-side session)** | UI state management |
 
 ### Backend — Gateway
 | Technology | Purpose |
 |-----------|---------|
-| **Node.js** (Fastify) | WebSocket connection management, auth, routing |
+| **Python 3.14** (FastAPI) | WebSocket connection management, auth, routing |
 | **Redis** | Session management, model routing, pub/sub |
 | **PostgreSQL** | User accounts, voice models metadata, call history |
 | **S3 / GCS** | Audio sample storage, model weight storage |
@@ -227,7 +227,7 @@ Mockingbird supports multiple audio routing strategies for different use cases:
 ### Backend — ML Inference
 | Technology | Purpose |
 |-----------|---------|
-| **Python 3.12** (FastAPI + Uvicorn) | ML service orchestration, WebSocket audio streaming |
+| **Python 3.14** (FastAPI + Uvicorn) | ML service orchestration, WebSocket audio streaming |
 | **RVC** (Retrieval-based Voice Conversion) | Core real-time voice conversion engine |
 | **OpenVoice v2** | Zero-shot instant voice cloning |
 | **GPT-SoVITS** | Alternative zero-shot cloning (5-second samples) |
@@ -253,94 +253,92 @@ Mockingbird supports multiple audio routing strategies for different use cases:
 
 ### Voice Model
 
-```typescript
-interface VoiceModel {
-  id: string;                    // UUID
-  userId: string;                // Owner
-  name: string;                  // Display name (e.g., "Morgan Freeman")
-  type: 'instant' | 'hd';       // Clone quality tier
-  status: 'training' | 'ready' | 'failed';
-  
-  // Training metadata
-  sampleDurationSec: number;     // Total training audio duration
-  sampleCount: number;           // Number of audio segments
-  trainingStartedAt: Date;
-  trainingCompletedAt?: Date;
-  
-  // Model artifacts
-  modelPath: string;             // S3/GCS path to model weights
-  modelSizeBytes: number;
-  onnxPath?: string;             // Optimized ONNX model path
-  
-  // Quality metrics
-  similarityScore?: number;      // 0-1 voice similarity to target
-  mosScore?: number;             // Mean Opinion Score (quality)
-  
-  // Configuration
-  pitchOffset: number;           // Semitones adjustment (-12 to +12)
-  speedFactor: number;           // Playback speed (0.5 to 2.0)
-  breathiness: number;           // 0.0 to 1.0
-  
-  createdAt: Date;
-  updatedAt: Date;
-}
+```python
+# Pydantic/SQLModel — see gateway/app/db/models.py
+class VoiceModel(BaseModel):
+    id: UUID                                            # UUID
+    user_id: UUID                                       # Owner
+    name: str                                           # Display name (e.g., "Morgan Freeman")
+    type: Literal["instant", "hd"]                      # Clone quality tier
+    status: Literal["training", "ready", "failed"]
+
+    # Training metadata
+    sample_duration_sec: float                          # Total training audio duration
+    sample_count: int                                   # Number of audio segments
+    training_started_at: datetime
+    training_completed_at: datetime | None = None
+
+    # Model artifacts
+    model_path: str                                     # S3/GCS path to model weights
+    model_size_bytes: int
+    onnx_path: str | None = None                        # Optimized ONNX model path
+
+    # Quality metrics
+    similarity_score: float | None = None               # 0-1 voice similarity to target
+    mos_score: float | None = None                      # Mean Opinion Score (quality)
+
+    # Configuration
+    pitch_offset: float                                 # Semitones adjustment (-12 to +12)
+    speed_factor: float                                 # Playback speed (0.5 to 2.0)
+    breathiness: float                                  # 0.0 to 1.0
+
+    created_at: datetime
+    updated_at: datetime
 ```
 
 ### Call Record
 
-```typescript
-interface CallRecord {
-  id: string;
-  userId: string;
-  voiceModelId: string;
-  
-  // Call details
-  direction: 'inbound' | 'outbound' | 'p2p';
-  phoneNumber?: string;          // PSTN calls
-  peerId?: string;               // P2P WebRTC calls
-  
-  // Timing
-  startedAt: Date;
-  endedAt?: Date;
-  durationSec: number;
-  
-  // Quality metrics
-  avgLatencyMs: number;
-  p95LatencyMs: number;
-  dropoutCount: number;          // Audio dropout events
-  
-  // Recording
-  originalAudioPath?: string;    // S3 path
-  transformedAudioPath?: string; // S3 path
-  
-  status: 'active' | 'completed' | 'failed';
-}
+```python
+class CallRecord(BaseModel):
+    id: UUID
+    user_id: UUID
+    voice_model_id: UUID
+
+    # Call details
+    direction: Literal["inbound", "outbound", "p2p"]
+    phone_number: str | None = None                     # PSTN calls
+    peer_id: str | None = None                          # P2P WebRTC calls
+
+    # Timing
+    started_at: datetime
+    ended_at: datetime | None = None
+    duration_sec: float
+
+    # Quality metrics
+    avg_latency_ms: float
+    p95_latency_ms: float
+    dropout_count: int                                  # Audio dropout events
+
+    # Recording
+    original_audio_path: str | None = None              # S3 path
+    transformed_audio_path: str | None = None           # S3 path
+
+    status: Literal["active", "completed", "failed"]
 ```
 
 ### User
 
-```typescript
-interface User {
-  id: string;
-  email: string;
-  displayName: string;
-  
-  // Subscription
-  plan: 'free' | 'pro' | 'enterprise';
-  monthlyMinutesUsed: number;
-  monthlyMinutesLimit: number;
-  
-  // Settings
-  preferredSampleRate: 16000 | 44100 | 48000;
-  preferredBufferSize: 128 | 256 | 512;
-  noiseSuppressionEnabled: boolean;
-  echoCancellationEnabled: boolean;
-  
-  // Phone
-  twilioPhoneNumber?: string;
-  
-  createdAt: Date;
-}
+```python
+class User(BaseModel):
+    id: UUID
+    email: str
+    display_name: str
+
+    # Subscription
+    plan: Literal["free", "pro", "enterprise"]
+    monthly_minutes_used: float
+    monthly_minutes_limit: float
+
+    # Settings
+    preferred_sample_rate: Literal[16000, 44100, 48000]
+    preferred_buffer_size: Literal[128, 256, 512]
+    noise_suppression_enabled: bool
+    echo_cancellation_enabled: bool
+
+    # Phone
+    twilio_phone_number: str | None = None
+
+    created_at: datetime
 ```
 
 ---
@@ -597,7 +595,7 @@ For users who need the absolute lowest latency or when self-hosted GPU capacity 
 - [ ] RVC model integration with ONNX optimization
 - [ ] Instant Clone via OpenVoice (10-30 second samples)
 - [ ] Preview Mode (mic → transform → speaker)
-- [ ] Basic web UI (Next.js): Voice Studio + Live Monitor
+- [ ] Basic web UI (FastAPI + Jinja2 + HTMX): Voice Studio + Live Monitor
 - [ ] User authentication (Supabase)
 - [ ] Single-server deployment (1 GPU node)
 
