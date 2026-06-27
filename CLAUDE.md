@@ -20,6 +20,16 @@ different voice in <300ms, and play it back or pipe it into a phone/WebRTC call.
 description is in [README.md](README.md); the authoritative detailed spec (data models, API design, latency
 budgets) is in [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md).
 
+## Goal & current focus
+
+Mockingbird is a **portfolio / learning** project — optimize for clean architecture and forward momentum,
+not production hardening. Bias toward small, compartmentalized specs (one service or one vertical slice at a
+time) and surface key decisions for explicit sign-off before implementing.
+
+**First build target: the vertical echo slice.** The thinnest end-to-end path that proves the latency loop —
+mic capture → WS → gateway → echo the audio straight back → playback — with *no* real voice model. Get this
+working and measured against the budget before standing up inference.
+
 ## Architecture
 
 The project is an **all-Python stack**: frontend, gateway/middleware, and inference are all Python services.
@@ -59,9 +69,9 @@ This repo is meant to be built using the per-domain agent specs in `agents/`:
 | Agent | File | Scope |
 |-------|------|-------|
 | Orchestrator | `agents/AGENTS.md` | Shared contracts, env vars, build order |
-| Frontend | `agents/frontend.agent.md` | Next.js app, pages, components |
-| Audio Engine | `agents/audio-engine.agent.md` | AudioWorklet, ring buffer, WS client |
-| Gateway | `agents/gateway.agent.md` | Node.js WS gateway, auth, routing |
+| Frontend | `agents/frontend.agent.md` | FastAPI + Jinja2 + HTMX app, server-rendered pages |
+| Audio Engine | `agents/audio-engine.agent.md` | AudioWorklet, ring buffer, WS client (browser JS glue) |
+| Gateway | `agents/gateway.agent.md` | Python (FastAPI) WS gateway, auth, routing |
 | Inference | `agents/inference.agent.md` | Python ML service, RVC/OpenVoice, training |
 | Infrastructure | `agents/infrastructure.agent.md` | Docker, K8s, CI/CD, monitoring |
 
@@ -92,16 +102,20 @@ all three services:
 
 ## Important notes
 
-- **This file's stack decision overrides the agent specs.** The files under `agents/` and parts of
-  `README.md` still describe a polyglot stack (Next.js 15 + React 19 frontend, Node.js/Fastify gateway,
-  TypeScript). That is **superseded** — build frontend and gateway in Python per the section above. Treat the
-  agent specs as the source of truth for *behavior and contracts* (class signatures, WS/gRPC message shapes,
-  latency budgets), not for language or runtime choices.
+- **The agent specs and this file agree: the stack is all-Python.** `agents/*.agent.md` have been converted
+  (FastAPI + Jinja2 + HTMX frontend, FastAPI gateway). Treat them as the detailed source of truth for
+  *behavior and contracts* (class signatures, WS/gRPC message shapes, latency budgets), and this file as the
+  source of truth for *stack and tooling*. If a stray Next.js/React/Node reference survives anywhere, it's a
+  leftover — Python wins.
 - **uv + Ruff only.** Reach for npm/yarn/pip/poetry or Prettier/ESLint and you're off-spec. The lone
   exception is the browser AudioWorklet shim, which is unavoidably JS — keep it as thin as possible.
 - The audio hot path still matters regardless of language: the `process()` AudioWorklet callback must stay
   zero-allocation, and changes to the streaming path are judged against the ~172ms latency budget, not just
   functional correctness.
+- **Hooks enforce the rules above** (`.claude/settings.json` + `.claude/hooks/`): writing `.env`/secret/key
+  files, off-stack tools (npm/yarn/pnpm/pip/poetry/conda), and destructive git (`push --force`,
+  `reset --hard`, `branch -D`, `clean -f`) are **blocked**, not just discouraged. Edited `.py` files are
+  auto-formatted with Ruff on save. Don't route around a block — fix the underlying action.
 
 ## Environment variables
 
