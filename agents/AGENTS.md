@@ -31,9 +31,9 @@ For building the project from scratch, invoke agents in this order:
 ```
 1. Infrastructure Agent  → Set up Docker, databases, project scaffolding
 2. Inference Agent       → ML models, training pipeline, WebSocket streaming
-3. Gateway Agent         → Node.js WebSocket gateway, auth, routing
+3. Gateway Agent         → Python (FastAPI) WebSocket gateway, auth, routing
 4. Audio Engine Agent    → Browser audio pipeline (AudioWorklet, WebSocket)
-5. Frontend Agent        → Next.js UI, pages, components
+5. Frontend Agent        → FastAPI + Jinja2 + HTMX UI, pages, templates
 ```
 
 Each agent can work independently but should respect shared interfaces (API contracts, WebSocket message formats, data models).
@@ -44,9 +44,9 @@ Each agent can work independently but should respect shared interfaces (API cont
 
 | Agent | File | Scope | Primary Language |
 |-------|------|-------|-----------------|
-| **Frontend** | `frontend.agent.md` | Next.js app, React components, pages, routing | TypeScript |
-| **Audio Engine** | `audio-engine.agent.md` | Web Audio API, AudioWorklet, WebSocket streaming, ring buffers | TypeScript |
-| **Gateway** | `gateway.agent.md` | WebSocket connection management, auth, model routing | TypeScript |
+| **Frontend** | `frontend.agent.md` | FastAPI + Jinja2 + HTMX app, templates, pages, routing | Python |
+| **Audio Engine** | `audio-engine.agent.md` | Web Audio API, AudioWorklet, WebSocket streaming, ring buffers | JavaScript (browser glue) |
+| **Gateway** | `gateway.agent.md` | WebSocket connection management, auth, model routing | Python |
 | **Inference** | `inference.agent.md` | ML model serving, RVC/OpenVoice, training, voice conversion | Python |
 | **Infrastructure** | `infrastructure.agent.md` | Docker, Kubernetes, CI/CD, monitoring, deployment | YAML/HCL |
 
@@ -113,12 +113,12 @@ ENABLE_CALLING=true
 ENABLE_RECORDING=false
 ```
 
-### Data Models (TypeScript)
+### Data Models (Python)
 
-All agents should reference the shared types defined in `frontend/src/lib/types/`:
+All agents should reference the shared Pydantic/SQLModel models defined in `gateway/app/db/models.py`:
 
-```typescript
-// VoiceModel, CallRecord, User — see docs/PRODUCT_SPEC.md Section 6
+```python
+# VoiceModel, CallRecord, User — see docs/PRODUCT_SPEC.md Section 6
 ```
 
 ---
@@ -131,14 +131,14 @@ All agents should reference the shared types defined in `frontend/src/lib/types/
 - `feature/<agent>/<feature>` — Feature branches (e.g., `feature/frontend/voice-studio`)
 
 ### Testing Requirements
-- **Frontend**: Vitest + React Testing Library for components, Playwright for E2E
-- **Gateway**: Vitest for unit tests, WebSocket integration tests
+- **Frontend**: pytest for route/handler tests, pytest-playwright for E2E
+- **Gateway**: pytest for unit tests, WebSocket integration tests (httpx / Starlette TestClient)
 - **Inference**: pytest for unit tests, audio quality benchmarks
 - **Audio Engine**: Manual browser testing + automated latency benchmarks
 
 ### Code Quality
-- ESLint + Prettier (TypeScript)
-- Ruff + mypy (Python)
+- Ruff (format + lint) + mypy across all Python services
+- uv for dependency management (no npm/pip/poetry); commit `uv.lock`
 - Pre-commit hooks for formatting
 - CI pipeline runs all tests on PR
 

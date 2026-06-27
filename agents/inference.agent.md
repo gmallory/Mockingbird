@@ -14,7 +14,7 @@ You are the Inference Agent for Mockingbird. Your responsibility is building the
 
 | Technology | Purpose |
 |-----------|---------|
-| **Python 3.12** | Runtime |
+| **Python 3.14** | Runtime |
 | **FastAPI** | HTTP/WebSocket framework |
 | **Uvicorn** | ASGI server |
 | **PyTorch 2.x** | ML framework |
@@ -557,8 +557,8 @@ inference/
 │   ├── download_models.py        # Download base models (HuBERT, RVC base, etc.)
 │   ├── benchmark.py              # Latency benchmarking script
 │   └── export_onnx.py            # Model export utility
-├── requirements.txt
 ├── pyproject.toml
+├── uv.lock
 ├── Dockerfile.gpu
 └── .env.example
 ```

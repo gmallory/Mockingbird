@@ -107,7 +107,7 @@ services:
       file: docker-compose.yml
       service: minio
 
-  # Gateway (Node.js)
+  # Gateway (Python/FastAPI)
   gateway:
     build:
       context: ./gateway
@@ -174,8 +174,8 @@ services:
       redis:
         condition: service_healthy
 
-  # Frontend (Next.js) — for production builds only
-  # In development, run `npm run dev` locally for hot reload
+  # Frontend (Python/FastAPI) — for production builds only
+  # In development, run `uv run uvicorn app.main:app --reload` locally for hot reload
   frontend:
     build:
       context: ./frontend
@@ -183,8 +183,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:3001
-      - NEXT_PUBLIC_WS_URL=ws://localhost:3001
+      - PUBLIC_API_URL=http://localhost:3001
+      - PUBLIC_WS_URL=ws://localhost:3001
     depends_on:
       - gateway
 ```
@@ -193,24 +193,23 @@ services:
 
 ## Dockerfiles
 
-### Gateway (Node.js)
+### Gateway (Python/FastAPI)
 
 ```dockerfile
 # gateway/Dockerfile
-FROM node:20-alpine AS builder
+FROM python:3.14-slim AS builder
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 COPY . .
-RUN npm run build
 
-FROM node:20-alpine
+FROM python:3.14-slim
 WORKDIR /app
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
+COPY --from=builder /app /app
+ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 3001
-CMD ["node", "dist/server.js"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3001"]
 ```
 
 ### Inference Service (Python + GPU)
@@ -219,17 +218,19 @@ CMD ["node", "dist/server.js"]
 # inference/Dockerfile.gpu
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
-# Install Python 3.12
+# Install Python 3.14
 RUN apt-get update && apt-get install -y \
-    python3.12 python3.12-venv python3-pip \
+    python3.14 python3.14-venv \
     libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies with uv
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Download base models (HuBERT, Silero VAD, etc.)
 COPY scripts/download_models.py scripts/
@@ -242,25 +243,19 @@ EXPOSE 8001 50051
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
 ```
 
-### Frontend (Next.js)
+### Frontend (Python/FastAPI)
 
 ```dockerfile
 # frontend/Dockerfile
-FROM node:20-alpine AS builder
+FROM python:3.14-slim
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 COPY . .
-RUN npm run build
-
-FROM node:20-alpine
-WORKDIR /app
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
+ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
 ```
 
 ---
@@ -278,21 +273,19 @@ on:
     branches: [main, develop]
 
 jobs:
-  # Frontend tests and build
+  # Frontend tests
   frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: astral-sh/setup-uv@v5
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: cd frontend && npm ci
-      - run: cd frontend && npm run lint
-      - run: cd frontend && npm run typecheck
-      - run: cd frontend && npm test
-      - run: cd frontend && npm run build
+          python-version: "3.14"
+      - run: cd frontend && uv sync
+      - run: cd frontend && uv run ruff check .
+      - run: cd frontend && uv run ruff format --check .
+      - run: cd frontend && uv run mypy app/
+      - run: cd frontend && uv run pytest
 
   # Gateway tests and build
   gateway:
@@ -312,15 +305,13 @@ jobs:
           - 6379:6379
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: astral-sh/setup-uv@v5
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: gateway/package-lock.json
-      - run: cd gateway && npm ci
-      - run: cd gateway && npm run lint
-      - run: cd gateway && npm run typecheck
-      - run: cd gateway && npm test
+          python-version: "3.14"
+      - run: cd gateway && uv sync
+      - run: cd gateway && uv run ruff check .
+      - run: cd gateway && uv run mypy app/
+      - run: cd gateway && uv run pytest
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/mockingbird_test
           REDIS_URL: redis://localhost:6379
@@ -330,14 +321,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-          cache: pip
-      - run: cd inference && pip install -r requirements.txt -r requirements-dev.txt
-      - run: cd inference && ruff check .
-      - run: cd inference && mypy app/
-      - run: cd inference && pytest tests/ -v --cov=app
+          python-version: "3.14"
+      - run: cd inference && uv sync
+      - run: cd inference && uv run ruff check .
+      - run: cd inference && uv run mypy app/
+      - run: cd inference && uv run pytest tests/ -v --cov=app
 
   # Docker build verification
   docker-build:
@@ -539,8 +529,8 @@ SENTRY_DSN=https://xxx@sentry.io/xxx
 PROMETHEUS_PORT=9090
 
 # === FRONTEND ===
-NEXT_PUBLIC_API_URL=http://localhost:3001
-NEXT_PUBLIC_WS_URL=ws://localhost:3001
+PUBLIC_API_URL=http://localhost:3001
+PUBLIC_WS_URL=ws://localhost:3001
 ```
 
 ---
