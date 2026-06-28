@@ -49,11 +49,15 @@ case "$tool" in
     printf '%s' "$cmd" | grep -Eq 'git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*f' \
       && block "git clean -f deletes untracked files irreversibly."
 
-    # Staging secrets to git (allow .env.example/.sample/.template).
-    if printf '%s' "$cmd" | grep -Eq 'git[[:space:]]+add\b' \
-       && printf '%s' "$cmd" | grep -Eq '\.env\b' \
-       && ! printf '%s' "$cmd" | grep -Eq '\.env\.(example|sample|template)\b'; then
-      block "staging a .env secret. Only .env.example belongs in git."
+    # Staging secrets to git. Inspect only the `git add` argument span (up to the
+    # next shell separator), so a dotenv mention elsewhere (for example in a commit
+    # message in the same compound command) does not trip this. Strip the allowed
+    # templates first, then block if any dotenv reference remains.
+    addargs="$(printf '%s' "$cmd" | grep -oE 'git[[:space:]]+add[[:space:]]+[^;&|]*' || true)"
+    if [ -n "$addargs" ]; then
+      stripped="$(printf '%s' "$addargs" | sed -E 's/\.env\.(example|sample|template)//g')"
+      printf '%s' "$stripped" | grep -Eq '\.env' \
+        && block "staging a .env secret. Only .env.example/.sample/.template belong in git."
     fi
     ;;
 esac
