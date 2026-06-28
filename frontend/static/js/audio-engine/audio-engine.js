@@ -211,9 +211,14 @@ export class AudioEngine {
   _onWorkerMessage(data) {
     switch (data.type) {
       case "connected":
+        // Start RTT tracking fresh: any send timestamps from before a
+        // reconnect will never be matched (their echoes were dropped), so the
+        // FIFO queue must not carry across the connection boundary.
+        this.latency.reset();
         this._emit("connection", "connected");
         break;
       case "disconnected":
+        this.latency.reset();
         this._emit("connection", "disconnected");
         break;
       case "error":

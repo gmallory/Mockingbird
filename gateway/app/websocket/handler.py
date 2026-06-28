@@ -25,7 +25,6 @@ from app.websocket.protocol import (
 
 async def voice_stream(websocket: WebSocket) -> None:
     await websocket.accept()
-    frames = 0
 
     try:
         # First message should be `start`, but we stay lenient: any control
@@ -42,7 +41,6 @@ async def voice_stream(websocket: WebSocket) -> None:
             if data_bytes is not None:
                 # echo — same PCM bytes straight back to the client
                 await websocket.send_bytes(data_bytes)
-                frames += 1
                 continue
 
             text = message.get("text")

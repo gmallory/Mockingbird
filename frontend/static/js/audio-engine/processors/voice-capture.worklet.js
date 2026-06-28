@@ -3,9 +3,11 @@
  * Capture worklet: accumulates 128-sample render quanta into fixed 20ms frames
  * (960 samples @ 48kHz) and posts each completed frame to the main thread.
  *
- * Echo-slice note: this uses postMessage for clarity. The production hardening
- * pass replaces it with a SharedArrayBuffer ring buffer (see plan, Milestone 7).
- * Even so, process() stays allocation-free on the steady path.
+ * Echo-slice note: this uses postMessage for clarity. Each completed frame is
+ * transferred via `buffer.slice()`, so it allocates one Float32Array per 20ms.
+ * The accumulation path itself reuses a preallocated buffer. The production
+ * hardening pass replaces this with a SharedArrayBuffer ring buffer to remove
+ * the per-frame allocation entirely (see plan, Milestone 7).
  */
 
 class VoiceCaptureProcessor extends AudioWorkletProcessor {

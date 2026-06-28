@@ -13,7 +13,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 3001
 
-    # CORS / WS origins allowed to connect. "*" is fine for local dev.
+    # HTTP CORS origins (feeds CORSMiddleware only). "*" is fine for local dev.
+    # Note: this does not enforce WebSocket Origin — that check arrives with
+    # gateway auth in a later milestone.
     allowed_origins: list[str] = ["*"]
 
 
