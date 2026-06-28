@@ -45,8 +45,11 @@ Run the bundled helper. It returns the unresolved Copilot threads as JSON — ea
 the `threadId` (for resolving later), the `commentId` (for replying), and the `path`,
 `line`, `body`, and `url`:
 
+The path is relative to this skill's own directory, so use the full path from
+the repo root (or `cd` into the skill directory first):
+
 ```bash
-scripts/list_copilot_threads.sh [PR_NUMBER]
+.claude/skills/respond-to-copilot-review/scripts/list_copilot_threads.sh [PR_NUMBER]
 ```
 
 Copilot's author login differs between GitHub's APIs (`Copilot` on REST inline
@@ -106,8 +109,8 @@ need an explicit go-ahead. Present one scannable summary and then wait:
 
 | # | path:line | Verdict | Fix made | Draft reply |
 |---|-----------|---------|----------|-------------|
-| 1 | `file:18` | Fix | added MultiEdit to matcher | "Good catch — …" |
-| 2 | `file:36` | Push back | none | "Intentional — …" |
+| 1 | `file:18` | Fix | added MultiEdit to matcher | "Added MultiEdit to the matcher so those edits hit the same hooks." |
+| 2 | `file:36` | Push back | none | "Intentional. uv pip is allowed on purpose (line 34)." |
 
 Say plainly that the code edits exist locally but **nothing has been pushed or
 posted**, and ask whether to proceed. Let the user amend any verdict or reply first.
@@ -138,6 +141,6 @@ gh api graphql -f query='
 | Need | Command |
 |------|---------|
 | Current branch's PR | `gh pr view --json number,url` |
-| Unresolved Copilot threads (JSON) | `scripts/list_copilot_threads.sh [PR]` |
+| Unresolved Copilot threads (JSON) | `.claude/skills/respond-to-copilot-review/scripts/list_copilot_threads.sh [PR]` |
 | Reply to a comment | `gh api --method POST repos/{owner}/{repo}/pulls/{PR}/comments/{COMMENT_ID}/replies -f body='…'` |
 | Resolve a thread | `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' -f t='THREAD_ID'` |

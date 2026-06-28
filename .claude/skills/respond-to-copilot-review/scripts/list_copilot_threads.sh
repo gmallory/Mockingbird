@@ -11,8 +11,10 @@
 #
 # Why a script: every run needs the same GraphQL query, and Copilot's author
 # login differs by API surface (`Copilot` on REST inline comments,
-# `copilot-pull-request-reviewer` in GraphQL). Matching `copilot`
-# case-insensitively catches both; filtering isResolved drops closed threads.
+# `copilot-pull-request-reviewer` in GraphQL). Anchoring on a leading
+# `copilot` (optionally followed by `-...`) catches both without matching
+# human logins that merely contain "copilot"; filtering isResolved drops
+# closed threads.
 set -euo pipefail
 
 command -v gh >/dev/null 2>&1 || { echo "error: gh CLI not found" >&2; exit 1; }
@@ -42,7 +44,7 @@ gh api graphql \
     .data.repository.pullRequest.reviewThreads.nodes
     | map(select(
         (.isResolved | not)
-        and ((.comments.nodes[0].author.login // "") | ascii_downcase | test("copilot"))
+        and ((.comments.nodes[0].author.login // "") | ascii_downcase | test("^copilot(-|$)"))
       ))
     | map({
         threadId:  .id,
