@@ -17,7 +17,7 @@ case "$tool" in
     case "$base" in
       .env.example|.env.sample|.env.template) ;;  # templates are allowed
       .env|.env.*)
-        block "writing secret env file '$base'. Real secrets go in .env (gitignored); edit .env.example for the template." ;;
+        block "writing '$base' is blocked. Maintain real secrets in .env by hand — it is gitignored and should never be written by Claude. Edit .env.example here for the committed template." ;;
     esac
     case "$base" in
       *.pem|*.key|id_rsa|id_rsa.*|id_ed25519|id_ed25519.*|credentials|credentials.json|*.p12|*.pfx)
@@ -33,6 +33,10 @@ case "$tool" in
     # Off-stack package managers. `uv pip ...` is allowed (preceded by "uv "); bare pip is not.
     if printf '%s' "$cmd" | grep -Eq '(^|[;&|]|&&|\|\|)[[:space:]]*(npm|npx|yarn|pnpm|poetry|pipenv|conda|pip3?)([[:space:]]|$)'; then
       block "off-stack tool. Mockingbird is uv + Ruff only — use 'uv add' / 'uv run'. (Browser AudioWorklet glue is hand-authored JS, no npm.)"
+    fi
+    # `python -m pip ...` / `python3 -m pip ...` bypasses the bare-pip check above.
+    if printf '%s' "$cmd" | grep -Eq 'python[0-9.]*[[:space:]]+-m[[:space:]]+pip\b'; then
+      block "off-stack tool (python -m pip). Mockingbird is uv + Ruff only — use 'uv add' / 'uv run'."
     fi
 
     # Destructive git.
