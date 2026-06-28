@@ -1,0 +1,90 @@
+:root {
+  --bg: #0a0a0f;
+  --panel: #15151f;
+  --text: #f0f0f5;
+  --muted: #8888a0;
+  --accent: #6c5ce7;
+  --good: #00b894;
+  --warn: #fdcb6e;
+  --bad: #ff6b6b;
+  --border: rgba(255, 255, 255, 0.08);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.shell {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+h1 { margin: 0 0 0.25rem; font-size: 1.6rem; }
+.subtitle { color: var(--muted); margin: 0 0 2rem; }
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0.7rem 1.6rem;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+.badge {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.badge--ok { color: var(--good); border-color: var(--good); }
+.badge--idle { color: var(--muted); }
+
+.metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+.metric { display: flex; flex-direction: column; gap: 0.4rem; }
+.metric__label { color: var(--muted); font-size: 0.8rem; }
+.metric__value { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+
+.latency--idle { color: var(--muted); }
+.latency--good { color: var(--good); }
+.latency--warn { color: var(--warn); }
+.latency--bad { color: var(--bad); }
+
+.meter {
+  height: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.meter__fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 60ms linear;
+}
+
+.status { color: var(--muted); margin-top: 1.5rem; min-height: 1.2em; }
+.budget-note { color: var(--muted); font-size: 0.8rem; margin-top: 0.5rem; }

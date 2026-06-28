@@ -1,0 +1,247 @@
+// @ts-check
+/**
+ * AudioEngine — main-thread orchestrator for the echo loop.
+ *
+ *   mic -> MediaStreamSource -> CaptureWorklet -> WebSocket worker -> gateway
+ *   gateway (echo) -> WebSocket worker -> PlaybackWorklet -> speakers
+ *
+ * Emits: 'connection' (status string), 'latency' ({p50,p95}), 'level'
+ * ({input,output}), 'error' (Error|string).
+ *
+ * Echo-slice scope: postMessage transport (no SharedArrayBuffer yet), no auth.
+ * The public method surface matches agents/audio-engine.agent.md so later
+ * milestones can fill in model switching and controls without API churn.
+ */
+
+import { LatencyTracker, LevelSmoother } from "./utils/metrics.js";
+
+const BASE = "/static/js/audio-engine";
+
+/**
+ * @typedef {Object} AudioEngineConfig
+ * @property {string} websocketUrl
+ * @property {number} [sampleRate]
+ * @property {number} [chunkSizeMs]
+ * @property {boolean} [enableNoiseSuppression]
+ * @property {boolean} [enableEchoCancellation]
+ * @property {boolean} [enableAutoGainControl]
+ */
+
+export class AudioEngine {
+  /** @param {AudioEngineConfig} config */
+  constructor(config) {
+    this.config = {
+      sampleRate: 48000,
+      chunkSizeMs: 20,
+      enableNoiseSuppression: true,
+      enableEchoCancellation: true,
+      enableAutoGainControl: true,
+      ...config,
+    };
+
+    /** @type {AudioContext | null} */
+    this.audioContext = null;
+    /** @type {MediaStream | null} */
+    this.mediaStream = null;
+    this.captureNode = null;
+    this.playbackNode = null;
+    this.sourceNode = null;
+    /** @type {Worker | null} */
+    this.wsWorker = null;
+
+    this.transformEnabled = true;
+    this.latency = new LatencyTracker();
+    this.inputLevel = new LevelSmoother();
+    this.outputLevel = new LevelSmoother();
+
+    /** @type {Map<string, Set<Function>>} */
+    this._handlers = new Map();
+    this._latencyTimer = null;
+    this._levelTimer = null;
+  }
+
+  // ----- events -----------------------------------------------------------
+
+  /** @param {string} event @param {Function} handler */
+  on(event, handler) {
+    if (!this._handlers.has(event)) this._handlers.set(event, new Set());
+    this._handlers.get(event).add(handler);
+  }
+
+  /** @param {string} event @param {Function} handler */
+  off(event, handler) {
+    this._handlers.get(event)?.delete(handler);
+  }
+
+  /** @param {string} event @param {*} payload */
+  _emit(event, payload) {
+    this._handlers.get(event)?.forEach((h) => h(payload));
+  }
+
+  // ----- lifecycle --------------------------------------------------------
+
+  async start(modelId = null) {
+    const chunkSize = Math.round((this.config.sampleRate * this.config.chunkSizeMs) / 1000);
+
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        sampleRate: this.config.sampleRate,
+        noiseSuppression: this.config.enableNoiseSuppression,
+        echoCancellation: this.config.enableEchoCancellation,
+        autoGainControl: this.config.enableAutoGainControl,
+      },
+    });
+
+    this.audioContext = new AudioContext({
+      sampleRate: this.config.sampleRate,
+      latencyHint: "interactive",
+    });
+    if (this.audioContext.state === "suspended") await this.audioContext.resume();
+
+    await this.audioContext.audioWorklet.addModule(`${BASE}/processors/voice-capture.worklet.js`);
+    await this.audioContext.audioWorklet.addModule(`${BASE}/processors/voice-playback.worklet.js`);
+
+    this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
+
+    this.captureNode = new AudioWorkletNode(this.audioContext, "voice-capture", {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 1,
+      processorOptions: { chunkSize },
+    });
+    this.captureNode.port.onmessage = (e) => this._onCaptureMessage(e.data);
+
+    this.playbackNode = new AudioWorkletNode(this.audioContext, "voice-playback", {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    this.playbackNode.port.onmessage = (e) => this._onPlaybackMessage(e.data);
+
+    // Capture node writes no output (stays silent), but routing it to the
+    // destination keeps it pulled by the render graph. Playback drives audio.
+    this.sourceNode.connect(this.captureNode).connect(this.audioContext.destination);
+    this.playbackNode.connect(this.audioContext.destination);
+
+    this.wsWorker = new Worker(`${BASE}/websocket-worker.js`, { type: "module" });
+    this.wsWorker.onmessage = (e) => this._onWorkerMessage(e.data);
+    this.wsWorker.postMessage({
+      type: "connect",
+      url: this.config.websocketUrl,
+      modelId,
+      sampleRate: this.config.sampleRate,
+    });
+
+    this._startMeters();
+  }
+
+  async stop() {
+    this._stopMeters();
+    if (this.wsWorker) {
+      this.wsWorker.postMessage({ type: "disconnect" });
+      this.wsWorker.terminate();
+      this.wsWorker = null;
+    }
+    this.captureNode?.disconnect();
+    this.playbackNode?.disconnect();
+    this.sourceNode?.disconnect();
+    this.mediaStream?.getTracks().forEach((t) => t.stop());
+    if (this.audioContext && this.audioContext.state !== "closed") {
+      await this.audioContext.close();
+    }
+    this.audioContext = null;
+    this.mediaStream = null;
+    this.latency.reset();
+    this._emit("connection", "disconnected");
+  }
+
+  async dispose() {
+    await this.stop();
+    this._handlers.clear();
+  }
+
+  // ----- model + controls (stubs until inference lands) -------------------
+
+  async switchModel(modelId) {
+    this.wsWorker?.postMessage({ type: "switch_model", modelId });
+  }
+
+  setTransformEnabled(enabled) {
+    this.transformEnabled = enabled;
+    this.captureNode?.port.postMessage({ type: enabled ? "start" : "stop" });
+  }
+
+  setPitchOffset(_semitones) {
+    /* no-op until a voice model exists (Milestone 3) */
+  }
+
+  setSpeedFactor(_factor) {
+    /* no-op until a voice model exists (Milestone 3) */
+  }
+
+  // ----- metrics ----------------------------------------------------------
+
+  getLatency() {
+    return this.latency.stats();
+  }
+  getInputLevel() {
+    return this.inputLevel.value;
+  }
+  getOutputLevel() {
+    return this.outputLevel.value;
+  }
+
+  // ----- internal message handlers ----------------------------------------
+
+  _onCaptureMessage(data) {
+    if (data.type === "audio") {
+      if (!this.transformEnabled) return;
+      this.latency.markSent();
+      this.wsWorker?.postMessage({ type: "audio", data: data.data }, [data.data.buffer]);
+    } else if (data.type === "level") {
+      this.inputLevel.push(data.rms);
+    }
+  }
+
+  _onPlaybackMessage(data) {
+    if (data.type === "level") this.outputLevel.push(data.rms);
+  }
+
+  _onWorkerMessage(data) {
+    switch (data.type) {
+      case "connected":
+        this._emit("connection", "connected");
+        break;
+      case "disconnected":
+        this._emit("connection", "disconnected");
+        break;
+      case "error":
+        this._emit("error", data.message || "connection error");
+        break;
+      case "audio":
+        this.latency.markReceived();
+        this.playbackNode?.port.postMessage({ type: "audio", data: data.data }, [data.data.buffer]);
+        break;
+      case "control":
+        // ready / pong / metrics / error — surfaced for debugging if needed.
+        if (data.data?.type === "error") this._emit("error", data.data.message);
+        break;
+    }
+  }
+
+  _startMeters() {
+    this._latencyTimer = setInterval(() => this._emit("latency", this.latency.stats()), 500);
+    this._levelTimer = setInterval(
+      () => this._emit("level", { input: this.inputLevel.value, output: this.outputLevel.value }),
+      80,
+    );
+  }
+
+  _stopMeters() {
+    clearInterval(this._latencyTimer);
+    clearInterval(this._levelTimer);
+    this._latencyTimer = null;
+    this._levelTimer = null;
+  }
+}
