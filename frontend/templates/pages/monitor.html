@@ -5,7 +5,8 @@
 <section class="monitor">
   <header>
     <h1>Mockingbird — Live Monitor</h1>
-    <p class="subtitle">Vertical echo slice: mic → gateway → back to your speakers.</p>
+    <p class="subtitle">Mic → gateway → inference → back. With a voice configured, speak a phrase
+      then pause to hear it returned in the cloned voice.</p>
   </header>
 
   <div class="controls">
@@ -33,8 +34,10 @@
   </div>
 
   <p id="status" class="status"></p>
-  <p class="budget-note">Budget reference: ~172ms end-to-end target. Echo has no inference cost,
-    so expect this well under it — the headroom you keep once a voice model is added.</p>
+  <p class="budget-note">The ~172ms end-to-end budget applies to the per-frame self-hosted path. The
+    cloud (Cartesia) voice changer is utterance-based: it converts a whole phrase after you pause, so the
+    roundtrip readout reflects how long you spoke plus conversion, not the per-frame budget. Without a
+    voice configured the loop echoes your audio back unchanged.</p>
 </section>
 {% endblock %}
 
@@ -95,7 +98,8 @@
       await engine.start();
       running = true;
       toggleBtn.textContent = "Stop";
-      statusEl.textContent = "Speak — you should hear yourself echoed back.";
+      statusEl.textContent = "Speak a phrase, then pause — you'll hear it back in the cloned voice " +
+        "(or echoed, if no voice is configured).";
     } catch (err) {
       statusEl.textContent = "Could not start: " + (err?.message || err);
     } finally {

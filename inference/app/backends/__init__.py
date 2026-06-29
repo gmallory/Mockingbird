@@ -26,6 +26,11 @@ def get_backend(settings: Settings) -> InferenceBackend:
             base_url=settings.cartesia_base_url,
             version=settings.cartesia_version,
             default_voice_id=settings.cartesia_voice_id,
+            frame_ms=settings.frame_ms,
+            energy_threshold=settings.vad_energy_threshold,
+            silence_ms=settings.vad_silence_ms,
+            max_utterance_ms=settings.vad_max_utterance_ms,
+            preroll_ms=settings.vad_preroll_ms,
         )
 
     if name == "self_hosted":

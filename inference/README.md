@@ -1,16 +1,19 @@
 # Mockingbird Inference
 
 gRPC voice-conversion service. The gateway opens one bidirectional
-`VoiceConversion.Convert` stream per session and proxies Int16 PCM frames here;
-this service transforms each frame and streams it back 1:1.
+`VoiceConversion.Convert` stream per session and proxies Int16 PCM frames here.
+Each stream gets one per-stream `BackendSession`: input frames are pushed in and
+output frames are streamed back. Conversion is **not** required to be 1:1 — a
+clip-based backend buffers a whole utterance and emits a burst of output frames
+once the speaker pauses.
 
 The actual transform is chosen at startup by `INFERENCE_BACKEND`:
 
 | Backend       | What it does                                         |
 |---------------|------------------------------------------------------|
-| `passthrough` | Returns audio unchanged. The M3 default; proves the gRPC hop and lets us measure loop latency with zero model cost. |
-| `cartesia`    | Calls the Cartesia voice-changer API. Real transform, no GPU. Requires `CARTESIA_API_KEY`. |
-| `self_hosted` | Reserved for the local GPU model (RVC/OpenVoice). Not implemented yet. |
+| `passthrough` | Returns audio unchanged, one frame out per frame in. The default; proves the gRPC hop and lets us measure loop latency with zero model cost. |
+| `cartesia`    | Real cloud voice changer, no GPU. Cartesia's voice changer is clip-based, so this backend groups frames into utterances with a simple energy VAD and converts each on a trailing pause via `/voice-changer/sse` (walkie-talkie feel, not per-frame streaming). Requires `CARTESIA_API_KEY` and a target voice (`CARTESIA_VOICE_ID` or a per-session `modelId`). |
+| `self_hosted` | Reserved for the local GPU model (RVC/OpenVoice), the true low-latency per-frame path. Not implemented yet. |
 
 ## Run
 

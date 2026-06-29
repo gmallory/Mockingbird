@@ -58,6 +58,40 @@ def _passthrough_inference() -> Iterator[str]:
         server.stop(grace=None)
 
 
+class _BatchServicer(audio_pb2_grpc.VoiceConversionServicer):
+    """Utterance-like backend: emits output only in bursts of `every` inputs.
+
+    Models the non-1:1 conversion path — many frames go in silently, then a
+    burst comes back — so the gateway's decoupled reader is exercised.
+    """
+
+    def __init__(self, every: int) -> None:
+        self._every = every
+
+    def Convert(self, request_iterator, context):  # noqa: N802 - gRPC method name
+        buf = []
+        for frame in request_iterator:
+            buf.append(frame)
+            if len(buf) >= self._every:
+                for f in buf:
+                    yield audio_pb2.AudioFrame(
+                        pcm=f.pcm, sample_rate=f.sample_rate, model_id=f.model_id
+                    )
+                buf = []
+
+
+@contextmanager
+def _batch_inference(every: int) -> Iterator[str]:
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+    audio_pb2_grpc.add_VoiceConversionServicer_to_server(_BatchServicer(every), server)
+    port = server.add_insecure_port("localhost:0")
+    server.start()
+    try:
+        yield f"localhost:{port}"
+    finally:
+        server.stop(grace=None)
+
+
 def test_healthz() -> None:
     # `with` runs the lifespan so the Redis client on app.state exists.
     with TestClient(app) as client:
@@ -86,6 +120,24 @@ def test_ws_inference_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
 
             ws.send_json({"type": "ping"})
             assert ws.receive_json() == {"type": "pong"}
+
+
+def test_ws_forwards_non_1to1_burst(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Backend emits nothing until the 3rd frame, then returns the whole burst.
+    with _batch_inference(3) as addr:
+        monkeypatch.setattr(settings, "inference_grpc_url", addr)
+        client = TestClient(app)
+        with client.websocket_connect("/ws/voice") as ws:
+            assert ws.receive_json()["type"] == "ready"
+            ws.send_json({"type": "start", "sampleRate": 48000})
+            assert ws.receive_json()["type"] == "ready"
+
+            frames = [_pcm_frame([i, i, i, i]) for i in range(1, 4)]
+            for frame in frames:
+                ws.send_bytes(frame)
+            # The decoupled reader forwards the burst back in order.
+            got = [ws.receive_bytes() for _ in frames]
+            assert got == frames
 
 
 def test_ws_degrades_when_inference_down(monkeypatch: pytest.MonkeyPatch) -> None:
