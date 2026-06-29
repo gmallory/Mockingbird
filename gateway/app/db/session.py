@@ -1,8 +1,9 @@
 """Async database engine + session factory.
 
 A single shared ``async_sessionmaker`` per the gateway spec. The engine is
-lazily created so importing this module (e.g. by Alembic or tests) never opens a
-connection on its own.
+instantiated at import, but creating it opens no connection: asyncpg connects
+lazily on first use, so importing this module (e.g. by Alembic or tests) does
+not touch the database.
 """
 
 from collections.abc import AsyncIterator

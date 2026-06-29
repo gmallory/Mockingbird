@@ -1,7 +1,9 @@
 """Async User roundtrip against Postgres.
 
-Proves the migration/model/session stack writes and reads a real row. Skips
-cleanly when Postgres is unreachable so ``uv run pytest`` stays green without
+Exercises the model + async-session stack: writes and reads a real row. Schema
+is set up here via ``SQLModel.metadata.create_all`` (not Alembic); the migration
+itself is verified separately by ``alembic upgrade head``. Skips cleanly when
+Postgres is unreachable so ``uv run pytest`` stays green without
 ``docker compose up`` (the real proof is the manual verification with infra up).
 """
 

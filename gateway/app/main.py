@@ -57,8 +57,11 @@ async def _check_db() -> bool:
 
 
 async def _check_redis() -> bool:
+    redis = getattr(app.state, "redis", None)
+    if redis is None:  # lifespan hasn't run (e.g. a bare TestClient)
+        return False
     try:
-        return bool(await app.state.redis.ping())
+        return bool(await redis.ping())
     except Exception as exc:  # noqa: BLE001 - health check reports, never raises
         log.warning("healthz.redis_unreachable", error=str(exc))
         return False
