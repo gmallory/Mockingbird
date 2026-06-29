@@ -1,0 +1,27 @@
+[project]
+name = "mockingbird-gateway"
+version = "0.1.0"
+description = "Mockingbird WebSocket gateway — connection management, routing, and (for now) audio echo."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.138.1",
+    "pydantic-settings>=2.14.2",
+    "uvicorn[standard]>=0.49.0",
+    "websockets>=16.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
