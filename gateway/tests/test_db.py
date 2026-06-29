@@ -13,10 +13,10 @@ import pytest
 from sqlmodel import SQLModel, select
 
 from app.db.models import Plan, User
-from app.db.session import async_session, engine
+from app.db.session import create_engine, create_session_factory
 
 
-async def _ensure_schema() -> None:
+async def _ensure_schema(engine) -> None:
     """Create tables if missing; skip the test if the DB can't be reached."""
     try:
         async with engine.begin() as conn:
@@ -26,17 +26,27 @@ async def _ensure_schema() -> None:
 
 
 async def test_user_roundtrip() -> None:
-    await _ensure_schema()
+    # Own engine bound to this test's event loop, not the module-level shared
+    # one. pytest-asyncio runs each test in a fresh loop, so reusing a single
+    # engine across async tests would attach its asyncpg pool to a dead loop.
+    engine = create_engine()
+    async_session = create_session_factory(engine)
     email = f"roundtrip-{uuid4()}@example.com"
+    user_id = None
 
-    async with async_session() as session:
-        user = User(email=email, display_name="Roundtrip Tester")
-        session.add(user)
-        await session.commit()
-        await session.refresh(user)
-        user_id = user.id
-
+    # Whole body (including the initial write) is under try/finally so a failure
+    # anywhere still disposes the pool inside the running loop — otherwise the
+    # connections close at GC time and emit "coroutine was never awaited".
     try:
+        await _ensure_schema(engine)
+
+        async with async_session() as session:
+            user = User(email=email, display_name="Roundtrip Tester")
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            user_id = user.id
+
         async with async_session() as session:
             fetched = (await session.execute(select(User).where(User.email == email))).scalar_one()
             assert fetched.id == user_id
@@ -44,11 +54,13 @@ async def test_user_roundtrip() -> None:
             assert fetched.plan is Plan.FREE
             assert fetched.monthly_minutes_used == 0.0
     finally:
-        async with async_session() as session:
-            stored = await session.get(User, user_id)
-            if stored is not None:
-                await session.delete(stored)
-                await session.commit()
-        # Close pooled asyncpg connections inside the running loop, otherwise
-        # they are closed at GC time and emit "coroutine was never awaited".
-        await engine.dispose()
+        try:
+            # Delete in finally so the row is cleaned up even on assertion failure.
+            if user_id is not None:
+                async with async_session() as session:
+                    stored = await session.get(User, user_id)
+                    if stored is not None:
+                        await session.delete(stored)
+                        await session.commit()
+        finally:
+            await engine.dispose()

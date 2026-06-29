@@ -31,8 +31,12 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        await app.state.redis.aclose()
-        await engine.dispose()
+        # Close both independently: a failure closing Redis must not skip the
+        # engine dispose (and vice versa), or one pool leaks on shutdown.
+        try:
+            await app.state.redis.aclose()
+        finally:
+            await engine.dispose()
         log.info("gateway.shutdown")
 
 

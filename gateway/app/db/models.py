@@ -36,4 +36,10 @@ class User(SQLModel, table=True):
     # timezone=True -> Postgres TIMESTAMPTZ, so timezone-aware UTC values store
     # cleanly via asyncpg (a naive column rejects aware datetimes).
     created_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
-    updated_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
+    # onupdate keeps this current on every UPDATE; without it the column would
+    # stay frozen at insert time despite the name. Client-side, so no DDL change.
+    updated_at: datetime = Field(
+        default_factory=_utcnow,
+        sa_type=DateTime(timezone=True),
+        sa_column_kwargs={"onupdate": _utcnow},
+    )
