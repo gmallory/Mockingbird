@@ -13,10 +13,15 @@ def _pcm_frame(samples: list[int]) -> bytes:
 
 
 def test_healthz() -> None:
-    client = TestClient(app)
-    resp = client.get("/healthz")
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    # `with` runs the lifespan so the Redis client on app.state exists.
+    with TestClient(app) as client:
+        resp = client.get("/healthz")
+    body = resp.json()
+    assert set(body) == {"status", "db", "redis"}
+    # 200 when infra is up, 503 when it is not — both are valid shapes here.
+    assert resp.status_code in (200, 503)
+    if resp.status_code == 200:
+        assert body == {"status": "ok", "db": "ok", "redis": "ok"}
 
 
 def test_ws_echo_roundtrip() -> None:

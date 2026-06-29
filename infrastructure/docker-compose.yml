@@ -1,0 +1,42 @@
+# Mockingbird — local development infrastructure (CPU-only).
+#
+# Slim M2 stands up the two services the gateway wires into now: Postgres for
+# persistence and Redis for sessions/health. MinIO (S3-compatible object store)
+# is deferred to M3, where reference-audio storage is its first consumer.
+#
+#   docker compose up -d
+#
+# Compose v2 ignores the legacy top-level `version:` key, so it is omitted.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mockingbird
+      POSTGRES_USER: mockingbird
+      POSTGRES_PASSWORD: dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mockingbird"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
