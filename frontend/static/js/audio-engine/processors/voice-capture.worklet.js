@@ -8,6 +8,10 @@
  * The accumulation path itself reuses a preallocated buffer. The production
  * hardening pass replaces this with a SharedArrayBuffer ring buffer to remove
  * the per-frame allocation entirely (see plan, Milestone 7).
+ *
+ * The input level meter is accumulated across render quanta and posted only
+ * ~every 50ms, so process() does not allocate a message object on every quantum
+ * (~2.7ms) — the realtime thread stays effectively allocation-free.
  */
 
 class VoiceCaptureProcessor extends AudioWorkletProcessor {
@@ -19,6 +23,13 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
     this.buffer = new Float32Array(this.chunkSize);
     this.bufferIndex = 0;
     this.isActive = true;
+
+    // Level meter is emitted at ~50ms cadence rather than every render quantum,
+    // so the hot path doesn't allocate a message per quantum. `sampleRate` is a
+    // global in the AudioWorklet scope.
+    this.levelSumSquares = 0;
+    this.levelCount = 0;
+    this.levelInterval = Math.max(1, Math.round(sampleRate * 0.05));
 
     this.port.onmessage = (e) => {
       if (e.data.type === "stop") this.isActive = false;
@@ -47,9 +58,16 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
       }
     }
 
-    // RMS of this quantum, for the input level meter (cheap, no allocation).
-    const rms = Math.sqrt(sumSquares / input.length);
-    this.port.postMessage({ type: "level", rms });
+    // Accumulate energy for the input level meter and flush at ~50ms cadence,
+    // so the per-quantum path stays allocation-free.
+    this.levelSumSquares += sumSquares;
+    this.levelCount += input.length;
+    if (this.levelCount >= this.levelInterval) {
+      const rms = Math.sqrt(this.levelSumSquares / this.levelCount);
+      this.port.postMessage({ type: "level", rms });
+      this.levelSumSquares = 0;
+      this.levelCount = 0;
+    }
 
     return true;
   }

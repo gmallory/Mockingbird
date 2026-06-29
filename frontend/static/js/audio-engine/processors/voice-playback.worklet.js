@@ -2,7 +2,9 @@
 /**
  * Playback worklet: a single-producer/single-consumer ring buffer fed by audio
  * frames posted from the main thread (transformed/echoed audio off the socket).
- * Outputs silence on underrun. Pre-allocated; process() never allocates.
+ * Outputs silence on underrun. The ring buffer is pre-allocated and the
+ * per-quantum path is allocation-free; the output level meter is accumulated
+ * and posted only ~every 50ms rather than on every render quantum.
  */
 
 class VoicePlaybackProcessor extends AudioWorkletProcessor {
@@ -16,6 +18,12 @@ class VoicePlaybackProcessor extends AudioWorkletProcessor {
     this.readIndex = 0;
     this.writeIndex = 0;
     this.isActive = true;
+
+    // Output level meter emitted at ~50ms cadence (not per quantum) to keep the
+    // hot path allocation-free. `sampleRate` is a global in the worklet scope.
+    this.levelSumSquares = 0;
+    this.levelCount = 0;
+    this.levelInterval = Math.max(1, Math.round(sampleRate * 0.05));
 
     this.port.onmessage = (e) => {
       if (e.data.type === "audio") this.writeToBuffer(e.data.data);
@@ -57,8 +65,16 @@ class VoicePlaybackProcessor extends AudioWorkletProcessor {
       }
     }
 
-    const rms = Math.sqrt(sumSquares / output.length);
-    this.port.postMessage({ type: "level", rms });
+    // Accumulate energy and flush the level meter at ~50ms cadence, so the
+    // per-quantum path stays allocation-free.
+    this.levelSumSquares += sumSquares;
+    this.levelCount += output.length;
+    if (this.levelCount >= this.levelInterval) {
+      const rms = Math.sqrt(this.levelSumSquares / this.levelCount);
+      this.port.postMessage({ type: "level", rms });
+      this.levelSumSquares = 0;
+      this.levelCount = 0;
+    }
 
     return true;
   }

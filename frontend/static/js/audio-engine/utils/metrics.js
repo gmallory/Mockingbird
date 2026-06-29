@@ -24,7 +24,12 @@ export class LatencyTracker {
 
   markSent() {
     this.sendTimes.push(performance.now());
-    if (this.sendTimes.length > this.maxPending) this.sendTimes.shift();
+    // A growing backlog means echoes aren't coming back (e.g. a stall around
+    // reconnect). Dropping only the oldest would permanently mispair every
+    // later echo with a too-recent timestamp, silently under-reporting RTT for
+    // the rest of the session. Clear the whole pending queue instead and let it
+    // resync once the backlog drains.
+    if (this.sendTimes.length > this.maxPending) this.sendTimes.length = 0;
   }
 
   /** @returns {number | null} roundtrip ms for this frame, or null if unmatched */
