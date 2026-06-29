@@ -28,7 +28,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("email", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
         sa.Column("display_name", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-        sa.Column("plan", sa.Enum("free", "pro", "enterprise", name="plan"), nullable=False),
+        sa.Column("plan", sa.Enum("FREE", "PRO", "ENTERPRISE", name="plan"), nullable=False),
         sa.Column("monthly_minutes_used", sa.Float(), nullable=False),
         sa.Column("twilio_phone_number", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
         sa.Column("settings", sa.JSON(), nullable=False),

@@ -19,16 +19,13 @@ from app.config import settings
 
 
 def normalize_async_dsn(url: str) -> str:
-    """Coerce a bare Postgres DSN to the asyncpg driver.
+    """Coerce a plain ``postgresql://`` DSN to the asyncpg driver.
 
     ``.env.example`` ships ``DATABASE_URL=postgresql://...`` for tooling that
     expects the bare scheme; the async engine needs the ``+asyncpg`` driver.
-    Both ``postgresql://`` and the ``postgres://`` alias (libpq/Heroku-style) are
-    handled; a DSN that already names a driver is left untouched.
     """
-    for scheme in ("postgresql://", "postgres://"):
-        if url.startswith(scheme):
-            return f"postgresql+asyncpg://{url[len(scheme) :]}"
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return url
 
 
