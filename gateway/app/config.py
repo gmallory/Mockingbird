@@ -29,5 +29,10 @@ class Settings(BaseSettings):
     # degrades to passthrough instead of dropping.
     inference_grpc_url: str = "localhost:50051"
 
+    # Per-frame deadline for the inference round-trip. A stalled or wedged stream
+    # would otherwise hang the WS loop forever; on timeout the frame is treated as
+    # InferenceUnavailable so the session degrades to passthrough promptly.
+    inference_timeout_ms: int = 2000
+
 
 settings = Settings()

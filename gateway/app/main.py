@@ -87,4 +87,8 @@ async def healthz() -> JSONResponse:
 
 @app.websocket("/ws/voice")
 async def ws_voice(websocket: WebSocket) -> None:
-    await voice_stream(websocket, settings.inference_grpc_url)
+    await voice_stream(
+        websocket,
+        settings.inference_grpc_url,
+        timeout_s=settings.inference_timeout_ms / 1000,
+    )

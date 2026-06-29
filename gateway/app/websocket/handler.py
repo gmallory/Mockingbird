@@ -46,10 +46,10 @@ class _SessionState:
     latencies_ms: deque[float] = field(default_factory=lambda: deque(maxlen=_METRICS_EVERY))
 
 
-async def voice_stream(websocket: WebSocket, grpc_url: str) -> None:
+async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2.0) -> None:
     await websocket.accept()
     state = _SessionState()
-    session = InferenceSession(grpc_url)
+    session = InferenceSession(grpc_url, timeout_s=timeout_s)
 
     try:
         # First message should be `start`, but we stay lenient: signal readiness.
@@ -82,17 +82,25 @@ async def _handle_audio(
     state: _SessionState,
     pcm: bytes,
 ) -> None:
-    started = perf_counter()
-
+    # Passthrough mode: hand the original audio straight back. No inference hop
+    # happened, so we deliberately skip latency recording/metrics below — a near
+    # -zero latencyMs would misrepresent the (absent) inference round-trip.
     if state.degraded:
-        out = pcm  # passthrough: hand the original audio straight back
-    else:
-        try:
-            out = await session.convert(pcm, state.sample_rate, state.model_id)
-        except InferenceUnavailable:
-            state.degraded = True
-            out = pcm
-            await websocket.send_json(DegradedMessage().model_dump())
+        await websocket.send_bytes(pcm)
+        state.frames += 1
+        return
+
+    started = perf_counter()
+    try:
+        out = await session.convert(pcm, state.sample_rate, state.model_id)
+    except InferenceUnavailable:
+        # One-time notice, then the original audio passed through (degraded first,
+        # matching the client contract).
+        state.degraded = True
+        await websocket.send_json(DegradedMessage().model_dump())
+        await websocket.send_bytes(pcm)
+        state.frames += 1
+        return
 
     await websocket.send_bytes(out)
 
