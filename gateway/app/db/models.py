@@ -11,7 +11,9 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime
+from sqlalchemy import JSON, Column, DateTime
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.ext.mutable import MutableDict
 from sqlmodel import Field, SQLModel
 
 
@@ -19,6 +21,16 @@ class Plan(StrEnum):
     FREE = "free"
     PRO = "pro"
     ENTERPRISE = "enterprise"
+
+
+# By default SQLAlchemy stores a Python enum by member *name* ("FREE"); pin it to
+# the lowercase *value* ("free") so the PG enum labels follow Postgres convention
+# and match raw SQL / cross-service reads instead of the Python identifiers.
+def _plan_column() -> Column:
+    return Column(
+        SAEnum(Plan, name="plan", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+    )
 
 
 def _utcnow() -> datetime:
@@ -29,10 +41,15 @@ class User(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     email: str = Field(unique=True, index=True)
     display_name: str
-    plan: Plan = Plan.FREE
+    plan: Plan = Field(default=Plan.FREE, sa_column=_plan_column())
     monthly_minutes_used: float = 0.0
     twilio_phone_number: str | None = None
-    settings: dict = Field(default_factory=dict, sa_type=JSON)
+    # MutableDict so in-place edits (settings["k"] = v) are tracked and flushed;
+    # a bare JSON column only persists a wholesale reassignment.
+    settings: dict = Field(
+        default_factory=dict,
+        sa_column=Column(MutableDict.as_mutable(JSON), nullable=False),
+    )
     # timezone=True -> Postgres TIMESTAMPTZ, so timezone-aware UTC values store
     # cleanly via asyncpg (a naive column rejects aware datetimes).
     created_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
