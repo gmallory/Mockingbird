@@ -72,9 +72,21 @@ Server → Client (JSON):
   { "type": "ready", "latencyMs": 172 }
   { "type": "model_loaded", "modelId": "<uuid>" }
   { "type": "error", "code": "<error_code>", "message": "<description>" }
-  { "type": "metrics", "latencyMs": 165, "similarity": 0.92 }
+  { "type": "metrics", "latencyMs": 165, "framesProcessed": 1500 }
+  { "type": "degraded", "message": "<why transform is unavailable>" }
   { "type": "pong" }
 ```
+
+`degraded` is sent when the inference hop is unavailable; the gateway falls back to
+passing the original audio straight back (the M1 echo behavior) so the session survives.
+
+### Gateway ↔ Inference gRPC Protocol
+
+Defined in [`proto/audio.proto`](../proto/audio.proto) (`package mockingbird.audio.v1`). The
+gateway opens one bidirectional `VoiceConversion.Convert` stream per WebSocket session and
+proxies the same Int16 PCM frames described above; the inference service streams transformed
+frames back 1:1, in order. Both services generate stubs from this single `.proto` — keep it in
+sync with the WebSocket frame format above.
 
 ### REST API Base URL
 - Development: `http://localhost:3001/api`

@@ -69,3 +69,13 @@ class MetricsMessage(BaseModel):
 
 class PongMessage(BaseModel):
     type: Literal["pong"] = "pong"
+
+
+class DegradedMessage(BaseModel):
+    """Inference hop is unavailable; the gateway is passing audio through unchanged.
+
+    The session stays alive (client hears their own voice) instead of dropping.
+    """
+
+    type: Literal["degraded"] = "degraded"
+    message: str = "voice transformation temporarily unavailable"

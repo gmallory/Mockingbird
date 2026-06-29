@@ -1,9 +1,10 @@
 """Gateway FastAPI application.
 
-Hosts the ``/ws/voice`` echo loop (Milestone 1) and, as of Slim M2, a ``/healthz``
-that reports Postgres + Redis reachability. The WebSocket echo path is kept
-independent of the database/Redis so the live demo loop survives an infra outage.
-Auth, routing, and the gRPC proxy to inference arrive in later milestones.
+Hosts the ``/ws/voice`` loop, which (as of M3) proxies audio to the inference
+service over gRPC, plus a ``/healthz`` that reports Postgres + Redis reachability.
+The WebSocket path is kept independent of the database/Redis so the live demo
+loop survives an infra outage; it also degrades to passthrough if inference is
+down. Auth and routing arrive in later milestones.
 """
 
 from contextlib import asynccontextmanager
@@ -86,4 +87,4 @@ async def healthz() -> JSONResponse:
 
 @app.websocket("/ws/voice")
 async def ws_voice(websocket: WebSocket) -> None:
-    await voice_stream(websocket)
+    await voice_stream(websocket, settings.inference_grpc_url)
