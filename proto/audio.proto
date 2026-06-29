@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package mockingbird.audio.v1;
+
+// VoiceConversion is the gateway <-> inference contract. The gateway terminates
+// the browser WebSocket and proxies each session's audio frames here over a
+// single bidirectional stream; the inference service transforms each frame and
+// streams it back. Frame format mirrors the browser/WS contract in
+// agents/AGENTS.md: Int16 PCM, 20ms / 960 samples at 48kHz.
+service VoiceConversion {
+  // One bidirectional stream per active WebSocket session. Frames are 1:1 —
+  // each AudioFrame in yields one transformed AudioFrame out, in order.
+  rpc Convert(stream AudioFrame) returns (stream AudioFrame);
+}
+
+message AudioFrame {
+  bytes pcm = 1;          // Int16 PCM, little-endian. 20ms / 960 samples @ 48kHz = 1920 bytes.
+  int32 sample_rate = 2;  // Hz, e.g. 48000.
+  string model_id = 3;    // Target voice model. "" means passthrough / no model (M3).
+}

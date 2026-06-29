@@ -24,5 +24,15 @@ class Settings(BaseSettings):
     # Redis is stood up and pinged for health now; rate limiting/sessions land in M4.
     redis_url: str = "redis://localhost:6379"
 
+    # Inference gRPC target (matches INFERENCE_GRPC_URL in .env.example). The gateway
+    # opens one Convert stream per WS session; if it's unreachable the session
+    # degrades to passthrough instead of dropping.
+    inference_grpc_url: str = "localhost:50051"
+
+    # Per-frame deadline for the inference round-trip. A stalled or wedged stream
+    # would otherwise hang the WS loop forever; on timeout the frame is treated as
+    # InferenceUnavailable so the session degrades to passthrough promptly.
+    inference_timeout_ms: int = 2000
+
 
 settings = Settings()

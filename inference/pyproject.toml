@@ -1,29 +1,25 @@
 [project]
-name = "mockingbird-gateway"
-version = "0.2.0"
-description = "Mockingbird WebSocket gateway — connection management, routing, and (for now) audio echo."
+name = "mockingbird-inference"
+version = "0.1.0"
+description = "Mockingbird inference service — gRPC voice conversion with a swappable backend."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "alembic>=1.18.5",
-    "asyncpg>=0.31.0",
     "fastapi>=0.138.1",
-    "greenlet>=3.5.3",
     "grpcio>=1.81.1",
+    "httpx>=0.28.1",
+    "numpy>=2.1.0",
     "pydantic-settings>=2.14.2",
-    "redis>=8.0.1",
-    "sqlmodel>=0.0.39",
     "structlog>=26.1.0",
     "uvicorn[standard]>=0.49.0",
-    "websockets>=16.0",
 ]
 
 [dependency-groups]
 dev = [
     "grpcio-tools>=1.81.1",
-    "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.20",
 ]
 
 [tool.ruff]
@@ -35,9 +31,6 @@ extend-exclude = ["app/proto_gen"]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.ruff.lint.per-file-ignores]
-# Generated migrations always import sqlmodel from the template; it's unused in
-# migrations that touch no string columns.
-"alembic/versions/*" = ["F401"]
 # Generated gRPC stubs are not ours to lint.
 "app/proto_gen/*" = ["ALL"]
 

@@ -1,34 +1,58 @@
 """The ``/ws/voice`` endpoint.
 
-For the vertical echo slice this does the thinnest possible thing that proves
-the latency loop: it accepts the binary PCM frames the browser sends and writes
-the *same bytes* straight back, with no transformation and no model.
+Milestone 3: binary PCM frames are proxied to the inference service over a gRPC
+``Convert`` stream and the transformed frame is sent back to the browser. The
+control channel (start / switch_model / stop / ping) is unchanged.
 
-The streaming loop interleaves two kinds of message on one socket:
-  * binary frames  -> Int16 PCM audio (echoed back verbatim)
-  * text frames    -> JSON control messages (start / stop / ping)
+Two kinds of message interleave on one socket:
+  * binary frames  -> Int16 PCM audio (proxied to inference, transformed back)
+  * text frames    -> JSON control messages
 
->>> SEAM: in Milestone 3 the ``# echo`` line below is replaced by a gRPC call
->>> to the inference service; everything else here stays the same.
+If inference is unreachable, the session degrades to passthrough — the original
+audio is echoed back (the M1 behavior) and a ``degraded`` control message is sent
+once, so the loop survives an inference outage instead of dropping.
 """
+
+from collections import deque
+from dataclasses import dataclass, field
+from time import perf_counter
 
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from app.inference.client import InferenceSession, InferenceUnavailable
 from app.websocket.protocol import (
+    DegradedMessage,
     ErrorMessage,
+    MetricsMessage,
+    ModelLoadedMessage,
     PongMessage,
     ReadyMessage,
     client_message_adapter,
 )
 
+# How often (in frames) to push a metrics update to the client. At 20ms/frame,
+# every 50 frames is ~1s.
+_METRICS_EVERY = 50
 
-async def voice_stream(websocket: WebSocket) -> None:
+
+@dataclass
+class _SessionState:
+    sample_rate: int = 48000
+    model_id: str = ""
+    degraded: bool = False
+    frames: int = 0
+    # Bounded to the metrics window: a long session must not grow this unboundedly.
+    latencies_ms: deque[float] = field(default_factory=lambda: deque(maxlen=_METRICS_EVERY))
+
+
+async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2.0) -> None:
     await websocket.accept()
+    state = _SessionState()
+    session = InferenceSession(grpc_url, timeout_s=timeout_s)
 
     try:
-        # First message should be `start`, but we stay lenient: any control
-        # message is fine, and we simply signal readiness.
+        # First message should be `start`, but we stay lenient: signal readiness.
         await websocket.send_json(ReadyMessage().model_dump())
 
         while True:
@@ -39,19 +63,62 @@ async def voice_stream(websocket: WebSocket) -> None:
 
             data_bytes = message.get("bytes")
             if data_bytes is not None:
-                # echo — same PCM bytes straight back to the client
-                await websocket.send_bytes(data_bytes)
+                await _handle_audio(websocket, session, state, data_bytes)
                 continue
 
             text = message.get("text")
             if text is not None:
-                await _handle_control(websocket, text)
+                await _handle_control(websocket, state, text)
 
     except WebSocketDisconnect:
         pass
+    finally:
+        await session.aclose()
 
 
-async def _handle_control(websocket: WebSocket, text: str) -> None:
+async def _handle_audio(
+    websocket: WebSocket,
+    session: InferenceSession,
+    state: _SessionState,
+    pcm: bytes,
+) -> None:
+    # Passthrough mode: hand the original audio straight back. No inference hop
+    # happened, so we deliberately skip latency recording/metrics below — a near
+    # -zero latencyMs would misrepresent the (absent) inference round-trip.
+    if state.degraded:
+        await websocket.send_bytes(pcm)
+        state.frames += 1
+        return
+
+    started = perf_counter()
+    try:
+        out = await session.convert(pcm, state.sample_rate, state.model_id)
+    except InferenceUnavailable:
+        # One-time notice, then the original audio passed through (degraded first,
+        # matching the client contract).
+        state.degraded = True
+        await websocket.send_json(DegradedMessage().model_dump())
+        await websocket.send_bytes(pcm)
+        state.frames += 1
+        return
+
+    await websocket.send_bytes(out)
+
+    state.frames += 1
+    state.latencies_ms.append((perf_counter() - started) * 1000)
+    if state.frames % _METRICS_EVERY == 0:
+        # Mean round-trip for the inference hop over the last window (the deque
+        # already holds only the most recent _METRICS_EVERY samples).
+        window = state.latencies_ms
+        await websocket.send_json(
+            MetricsMessage(
+                latencyMs=sum(window) / len(window),
+                framesProcessed=state.frames,
+            ).model_dump()
+        )
+
+
+async def _handle_control(websocket: WebSocket, state: _SessionState, text: str) -> None:
     try:
         msg = client_message_adapter.validate_json(text)
     except ValidationError as exc:
@@ -61,8 +128,13 @@ async def _handle_control(websocket: WebSocket, text: str) -> None:
     if msg.type == "ping":
         await websocket.send_json(PongMessage().model_dump())
     elif msg.type == "start":
-        # Already sent `ready` on connect; re-affirm for clients that (re)start.
+        state.sample_rate = msg.sampleRate
+        state.model_id = msg.modelId or ""
         await websocket.send_json(ReadyMessage().model_dump())
+    elif msg.type == "switch_model":
+        # Passthrough ignores model_id in M3, but plumb it through and ack so the
+        # contract is exercised end-to-end (real model loading lands in M4).
+        state.model_id = msg.modelId
+        await websocket.send_json(ModelLoadedMessage(modelId=msg.modelId).model_dump())
     elif msg.type == "stop":
         await websocket.close()
-    # switch_model is a no-op in the echo slice (no models yet).
