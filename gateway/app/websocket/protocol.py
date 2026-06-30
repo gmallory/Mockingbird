@@ -61,12 +61,6 @@ class ErrorMessage(BaseModel):
     message: str = ""
 
 
-class MetricsMessage(BaseModel):
-    type: Literal["metrics"] = "metrics"
-    latencyMs: float  # noqa: N815
-    framesProcessed: int  # noqa: N815
-
-
 class PongMessage(BaseModel):
     type: Literal["pong"] = "pong"
 

@@ -7,8 +7,7 @@
  *
  * Emits: 'connection' (status string), 'latency' ({p50,p95}), 'level'
  * ({input,output}), 'error' (Error|string), 'degraded' (message string when the
- * inference hop falls back to passthrough), 'metrics' ({latencyMs,framesProcessed}
- * — the gateway's inference round-trip).
+ * inference hop falls back to passthrough).
  *
  * Echo-slice scope: postMessage transport (no SharedArrayBuffer yet), no auth.
  * The public method surface matches agents/audio-engine.agent.md so later
@@ -231,15 +230,10 @@ export class AudioEngine {
         this.playbackNode?.port.postMessage({ type: "audio", data: data.data }, [data.data.buffer]);
         break;
       case "control": {
-        // ready / pong / model_loaded / metrics / degraded / error.
+        // ready / pong / model_loaded / degraded / error.
         const ctrl = data.data;
         if (ctrl?.type === "error") this._emit("error", ctrl.message);
         else if (ctrl?.type === "degraded") this._emit("degraded", ctrl.message);
-        else if (ctrl?.type === "metrics")
-          this._emit("metrics", {
-            latencyMs: ctrl.latencyMs,
-            framesProcessed: ctrl.framesProcessed,
-          });
         break;
       }
     }

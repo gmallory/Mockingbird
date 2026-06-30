@@ -1,8 +1,15 @@
 """gRPC server: bidirectional ``VoiceConversion.Convert`` stream.
 
-One stream per WebSocket session (the gateway owns that mapping). For each
-inbound frame we call the selected backend and yield the transformed frame back
-in order, 1:1.
+One stream per WebSocket session (the gateway owns that mapping). Each stream
+opens one :class:`~app.backends.base.BackendSession`; inbound frames are pushed
+into it and any output frames it yields are streamed back in order.
+
+The stream is intentionally **not** 1:1. A frame-level backend (passthrough)
+yields one frame per input frame, so the loop behaves exactly as before. A
+clip-based backend (Cartesia) buffers a whole utterance silently and then emits
+a burst of output frames once the speaker pauses — so output frames are not
+aligned to input frames. ``flush`` drains any trailing buffered audio when the
+stream ends.
 """
 
 import grpc
@@ -19,13 +26,21 @@ class VoiceConversionServicer(audio_pb2_grpc.VoiceConversionServicer):
         self._backend = backend
 
     async def Convert(self, request_iterator, context):  # noqa: N802 - gRPC method name
-        async for frame in request_iterator:
-            pcm = await self._backend.convert(frame.pcm, frame.sample_rate, frame.model_id)
-            yield audio_pb2.AudioFrame(
-                pcm=pcm,
-                sample_rate=frame.sample_rate,
-                model_id=frame.model_id,
-            )
+        session = self._backend.open_session()
+        # Track the last frame's metadata so flushed frames (which arrive after
+        # the input stream has ended) carry a sensible sample_rate / model_id.
+        sample_rate = 48000
+        model_id = ""
+        try:
+            async for frame in request_iterator:
+                sample_rate = frame.sample_rate
+                model_id = frame.model_id
+                for pcm in await session.push(frame.pcm, frame.sample_rate, frame.model_id):
+                    yield audio_pb2.AudioFrame(pcm=pcm, sample_rate=sample_rate, model_id=model_id)
+            for pcm in await session.flush():
+                yield audio_pb2.AudioFrame(pcm=pcm, sample_rate=sample_rate, model_id=model_id)
+        finally:
+            await session.aclose()
 
 
 async def create_server(backend: InferenceBackend, host: str, port: int) -> grpc.aio.Server:

@@ -4,14 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Mockingbird is currently **pre-implementation**. The repository contains only documentation and agent
-configuration — there is no `frontend/`, `gateway/`, `inference/`, or `infrastructure/` code yet, no
-`package.json`, and no test suite. There are no build/lint/test commands to run because nothing has been
-scaffolded. Before assuming a command, directory, or file exists, check for it — the structure described
-below and in the docs is the *planned* layout, not the current one.
+Mockingbird is **under active implementation** (no longer pre-implementation). The three Python services
+exist and have test suites: `frontend/`, `gateway/`, and `inference/` (plus `infrastructure/`, `proto/`).
+Milestones **M1–M3** are done and **M4a** has landed:
 
-When implementing a piece of this project, treat `docs/PRODUCT_SPEC.md` and the relevant `agents/*.agent.md`
-file as the spec to build against, and create the directory structure they describe under the repo root.
+- **M1** — vertical echo slice (mic → WS → gateway echo → playback).
+- **M2** — data foundation: gateway Postgres + Redis, wired to `/healthz`.
+- **M3** — gRPC proxy + swappable inference backend (`passthrough` / `cartesia`).
+- **M4a** — VAD-segmented Cartesia voice conversion (utterance-based, clip API).
+
+The canonical milestone tracker — current state and the concrete next steps (**M4b** voice cloning +
+registry, **M4c** Voice Studio UI, then M5–M8) — is **[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus
+the relevant `agents/*.agent.md` before picking up work. `docs/PRODUCT_SPEC.md` remains the detailed spec
+(data models, API design, latency budgets). Still verify a directory/command/file exists before assuming
+it — parts of the planned layout (auth, self-hosted GPU, calling) are not built yet.
 
 ## What this project is
 
@@ -26,9 +32,10 @@ Mockingbird is a **portfolio / learning** project — optimize for clean archite
 not production hardening. Bias toward small, compartmentalized specs (one service or one vertical slice at a
 time) and surface key decisions for explicit sign-off before implementing.
 
-**First build target: the vertical echo slice.** The thinnest end-to-end path that proves the latency loop —
-mic capture → WS → gateway → echo the audio straight back → playback — with *no* real voice model. Get this
-working and measured against the budget before standing up inference.
+The vertical echo slice (M1) proved the latency loop and is done. **Current focus is M4** — the first
+usable real voice transform plus clone-your-voice: M4a (VAD-segmented Cartesia conversion) has landed;
+M4b (voice cloning + `voices` registry) is next, then M4c (Voice Studio UI). See
+[docs/ROADMAP.md](docs/ROADMAP.md) for the per-step breakdown.
 
 ## Architecture
 

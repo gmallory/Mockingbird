@@ -1,21 +1,30 @@
 """The ``/ws/voice`` endpoint.
 
-Milestone 3: binary PCM frames are proxied to the inference service over a gRPC
-``Convert`` stream and the transformed frame is sent back to the browser. The
-control channel (start / switch_model / stop / ping) is unchanged.
+Binary PCM frames are proxied to the inference service over a gRPC ``Convert``
+stream; converted frames are sent back to the browser. The control channel
+(start / switch_model / stop / ping) is unchanged.
+
+The conversion stream is **decoupled**: a clip-based backend buffers a whole
+utterance and emits a burst of output frames only once the speaker pauses, so
+output frames do not line up 1:1 with input frames. We therefore pump inbound
+frames with :meth:`InferenceSession.send` from the receive loop and forward
+converted frames from a concurrent reader task draining
+:meth:`InferenceSession.outputs`. Every outbound send goes through ``out_lock``
+so the reader and the receive loop never write to the socket at the same time.
 
 Two kinds of message interleave on one socket:
-  * binary frames  -> Int16 PCM audio (proxied to inference, transformed back)
+  * binary frames  -> Int16 PCM audio (proxied to inference, converted back)
   * text frames    -> JSON control messages
 
-If inference is unreachable, the session degrades to passthrough — the original
-audio is echoed back (the M1 behavior) and a ``degraded`` control message is sent
-once, so the loop survives an inference outage instead of dropping.
+Inference is dialed lazily on the first audio frame, so control-only sessions
+never touch it. If inference is unreachable — at open or mid-session — the
+session degrades to passthrough: the original audio is echoed back and a
+``degraded`` notice is sent once, so the loop survives the outage.
 """
 
-from collections import deque
-from dataclasses import dataclass, field
-from time import perf_counter
+import asyncio
+import contextlib
+from dataclasses import dataclass
 
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -24,16 +33,11 @@ from app.inference.client import InferenceSession, InferenceUnavailable
 from app.websocket.protocol import (
     DegradedMessage,
     ErrorMessage,
-    MetricsMessage,
     ModelLoadedMessage,
     PongMessage,
     ReadyMessage,
     client_message_adapter,
 )
-
-# How often (in frames) to push a metrics update to the client. At 20ms/frame,
-# every 50 frames is ~1s.
-_METRICS_EVERY = 50
 
 
 @dataclass
@@ -41,19 +45,52 @@ class _SessionState:
     sample_rate: int = 48000
     model_id: str = ""
     degraded: bool = False
-    frames: int = 0
-    # Bounded to the metrics window: a long session must not grow this unboundedly.
-    latencies_ms: deque[float] = field(default_factory=lambda: deque(maxlen=_METRICS_EVERY))
 
 
 async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2.0) -> None:
     await websocket.accept()
     state = _SessionState()
     session = InferenceSession(grpc_url, timeout_s=timeout_s)
+    out_lock = asyncio.Lock()
+    reader_task: asyncio.Task | None = None
+
+    async def send_json(payload: dict) -> None:
+        async with out_lock:
+            await websocket.send_json(payload)
+
+    async def send_bytes(data: bytes) -> None:
+        async with out_lock:
+            await websocket.send_bytes(data)
+
+    async def degrade() -> None:
+        # Idempotent: notify once, then audio is passed through unchanged. The
+        # notice send is best-effort — if the socket is already closing, swallow
+        # it so callers (the reader task included) never raise from degrading.
+        if state.degraded:
+            return
+        state.degraded = True
+        with contextlib.suppress(Exception):
+            await send_json(DegradedMessage().model_dump())
+
+    async def reader() -> None:
+        # Drains converted frames concurrently with the receive loop. Any exit
+        # that is not a teardown cancellation means inference stopped producing
+        # usable output — a clean EOF (server closed the stream mid-session) just
+        # as much as a failure — so fall back to passthrough. CancelledError is a
+        # BaseException, so teardown cancellation propagates past these handlers
+        # and skips the degrade below.
+        try:
+            async for out in session.outputs():
+                await send_bytes(out)
+        except InferenceUnavailable:
+            pass
+        except Exception:  # noqa: BLE001 - unexpected reader failure still degrades
+            pass
+        await degrade()
 
     try:
         # First message should be `start`, but we stay lenient: signal readiness.
-        await websocket.send_json(ReadyMessage().model_dump())
+        await send_json(ReadyMessage().model_dump())
 
         while True:
             message = await websocket.receive()
@@ -63,78 +100,71 @@ async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2
 
             data_bytes = message.get("bytes")
             if data_bytes is not None:
-                await _handle_audio(websocket, session, state, data_bytes)
+                if state.degraded:
+                    await send_bytes(data_bytes)  # passthrough echo
+                    continue
+                if reader_task is None:
+                    # Lazily dial inference and start the reader on the first frame.
+                    try:
+                        await session.open()
+                    except InferenceUnavailable:
+                        await degrade()
+                        await send_bytes(data_bytes)
+                        continue
+                    reader_task = asyncio.create_task(reader())
+                try:
+                    await session.send(data_bytes, state.sample_rate, state.model_id)
+                except InferenceUnavailable:
+                    # Stop the reader before degrading: a write that timed out
+                    # while reads still flow would otherwise keep bursting
+                    # converted frames that interleave with the passthrough echo.
+                    await degrade()
+                    reader_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await reader_task
+                    await send_bytes(data_bytes)
                 continue
 
             text = message.get("text")
             if text is not None:
-                await _handle_control(websocket, state, text)
+                if await _handle_control(send_json, state, text):
+                    break  # stop requested
 
     except WebSocketDisconnect:
         pass
     finally:
+        # Cancel the reader before closing the socket so its send path can never
+        # race websocket.close() — out_lock serializes sends, not the close.
+        if reader_task is not None:
+            reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reader_task
         await session.aclose()
+        with contextlib.suppress(Exception):
+            await websocket.close()
 
 
-async def _handle_audio(
-    websocket: WebSocket,
-    session: InferenceSession,
-    state: _SessionState,
-    pcm: bytes,
-) -> None:
-    # Passthrough mode: hand the original audio straight back. No inference hop
-    # happened, so we deliberately skip latency recording/metrics below — a near
-    # -zero latencyMs would misrepresent the (absent) inference round-trip.
-    if state.degraded:
-        await websocket.send_bytes(pcm)
-        state.frames += 1
-        return
-
-    started = perf_counter()
-    try:
-        out = await session.convert(pcm, state.sample_rate, state.model_id)
-    except InferenceUnavailable:
-        # One-time notice, then the original audio passed through (degraded first,
-        # matching the client contract).
-        state.degraded = True
-        await websocket.send_json(DegradedMessage().model_dump())
-        await websocket.send_bytes(pcm)
-        state.frames += 1
-        return
-
-    await websocket.send_bytes(out)
-
-    state.frames += 1
-    state.latencies_ms.append((perf_counter() - started) * 1000)
-    if state.frames % _METRICS_EVERY == 0:
-        # Mean round-trip for the inference hop over the last window (the deque
-        # already holds only the most recent _METRICS_EVERY samples).
-        window = state.latencies_ms
-        await websocket.send_json(
-            MetricsMessage(
-                latencyMs=sum(window) / len(window),
-                framesProcessed=state.frames,
-            ).model_dump()
-        )
-
-
-async def _handle_control(websocket: WebSocket, state: _SessionState, text: str) -> None:
+async def _handle_control(send_json, state: _SessionState, text: str) -> bool:
+    """Handle one JSON control message. Returns True if the session should stop."""
     try:
         msg = client_message_adapter.validate_json(text)
     except ValidationError as exc:
-        await websocket.send_json(ErrorMessage(code="bad_message", message=str(exc)).model_dump())
-        return
+        await send_json(ErrorMessage(code="bad_message", message=str(exc)).model_dump())
+        return False
 
     if msg.type == "ping":
-        await websocket.send_json(PongMessage().model_dump())
+        await send_json(PongMessage().model_dump())
     elif msg.type == "start":
         state.sample_rate = msg.sampleRate
         state.model_id = msg.modelId or ""
-        await websocket.send_json(ReadyMessage().model_dump())
+        await send_json(ReadyMessage().model_dump())
     elif msg.type == "switch_model":
-        # Passthrough ignores model_id in M3, but plumb it through and ack so the
-        # contract is exercised end-to-end (real model loading lands in M4).
+        # The selected voice id rides on each subsequent audio frame's model_id;
+        # ack so the client knows the gateway will convert to it from now on.
         state.model_id = msg.modelId
-        await websocket.send_json(ModelLoadedMessage(modelId=msg.modelId).model_dump())
+        await send_json(ModelLoadedMessage(modelId=msg.modelId).model_dump())
     elif msg.type == "stop":
-        await websocket.close()
+        # The receive loop breaks on True; voice_stream's finally closes the
+        # socket after the reader is cancelled, so the close is never raced.
+        return True
+    return False
