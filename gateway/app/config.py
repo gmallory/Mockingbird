@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # degrades to passthrough instead of dropping.
     inference_grpc_url: str = "localhost:50051"
 
+    # Inference HTTP base URL (matches INFERENCE_SERVICE_URL in .env.example). Used
+    # off the hot path for voice cloning: POST /voices proxies the clip here.
+    inference_service_url: str = "http://localhost:8001"
+
     # Per-frame deadline for the inference round-trip. A stalled or wedged stream
     # would otherwise hang the WS loop forever; on timeout the frame is treated as
     # InferenceUnavailable so the session degrades to passthrough promptly.

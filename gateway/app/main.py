@@ -19,6 +19,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.db.session import engine
 from app.logging import configure_logging
+from app.voices import router as voices_router
 from app.websocket.handler import voice_stream
 
 log = structlog.get_logger(__name__)
@@ -49,6 +50,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(voices_router)
 
 
 async def _check_db() -> bool:
