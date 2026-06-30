@@ -45,7 +45,6 @@ class _SessionState:
     sample_rate: int = 48000
     model_id: str = ""
     degraded: bool = False
-    reader_started: bool = False
 
 
 async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2.0) -> None:
@@ -64,24 +63,30 @@ async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2
             await websocket.send_bytes(data)
 
     async def degrade() -> None:
-        # Idempotent: notify once, then audio is passed through unchanged.
+        # Idempotent: notify once, then audio is passed through unchanged. The
+        # notice send is best-effort — if the socket is already closing, swallow
+        # it so callers (the reader task included) never raise from degrading.
         if state.degraded:
             return
         state.degraded = True
-        await send_json(DegradedMessage().model_dump())
+        with contextlib.suppress(Exception):
+            await send_json(DegradedMessage().model_dump())
 
     async def reader() -> None:
+        # Drains converted frames concurrently with the receive loop. Any exit
+        # that is not a teardown cancellation means inference stopped producing
+        # usable output — a clean EOF (server closed the stream mid-session) just
+        # as much as a failure — so fall back to passthrough. CancelledError is a
+        # BaseException, so teardown cancellation propagates past these handlers
+        # and skips the degrade below.
         try:
             async for out in session.outputs():
                 await send_bytes(out)
         except InferenceUnavailable:
-            await degrade()
-        except Exception:  # noqa: BLE001 - unexpected reader failure: degrade so the client keeps getting audio
-            # CancelledError is a BaseException, so shutdown cancellation still
-            # propagates past this. Suppress any secondary send failure when the
-            # socket is already closing during teardown.
-            with contextlib.suppress(Exception):
-                await degrade()
+            pass
+        except Exception:  # noqa: BLE001 - unexpected reader failure still degrades
+            pass
+        await degrade()
 
     try:
         # First message should be `start`, but we stay lenient: signal readiness.
@@ -98,7 +103,7 @@ async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2
                 if state.degraded:
                     await send_bytes(data_bytes)  # passthrough echo
                     continue
-                if not state.reader_started:
+                if reader_task is None:
                     # Lazily dial inference and start the reader on the first frame.
                     try:
                         await session.open()
@@ -106,31 +111,40 @@ async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2
                         await degrade()
                         await send_bytes(data_bytes)
                         continue
-                    state.reader_started = True
                     reader_task = asyncio.create_task(reader())
                 try:
                     await session.send(data_bytes, state.sample_rate, state.model_id)
                 except InferenceUnavailable:
+                    # Stop the reader before degrading: a write that timed out
+                    # while reads still flow would otherwise keep bursting
+                    # converted frames that interleave with the passthrough echo.
                     await degrade()
+                    reader_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await reader_task
                     await send_bytes(data_bytes)
                 continue
 
             text = message.get("text")
             if text is not None:
-                if await _handle_control(send_json, state, text, websocket):
+                if await _handle_control(send_json, state, text):
                     break  # stop requested
 
     except WebSocketDisconnect:
         pass
     finally:
+        # Cancel the reader before closing the socket so its send path can never
+        # race websocket.close() — out_lock serializes sends, not the close.
         if reader_task is not None:
             reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reader_task
         await session.aclose()
+        with contextlib.suppress(Exception):
+            await websocket.close()
 
 
-async def _handle_control(send_json, state: _SessionState, text: str, websocket: WebSocket) -> bool:
+async def _handle_control(send_json, state: _SessionState, text: str) -> bool:
     """Handle one JSON control message. Returns True if the session should stop."""
     try:
         msg = client_message_adapter.validate_json(text)
@@ -150,6 +164,7 @@ async def _handle_control(send_json, state: _SessionState, text: str, websocket:
         state.model_id = msg.modelId
         await send_json(ModelLoadedMessage(modelId=msg.modelId).model_dump())
     elif msg.type == "stop":
-        await websocket.close()
+        # The receive loop breaks on True; voice_stream's finally closes the
+        # socket after the reader is cancelled, so the close is never raced.
         return True
     return False

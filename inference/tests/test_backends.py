@@ -10,6 +10,7 @@ import json
 import struct
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from app.backends import get_backend
@@ -40,6 +41,22 @@ class _FakeStream:
                 yield line
 
         resp.aiter_lines = _aiter
+        return resp
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeErrorStream:
+    """client.stream() whose response raises HTTPStatusError on raise_for_status."""
+
+    async def __aenter__(self):
+        resp = MagicMock()
+        request = httpx.Request("POST", "http://test/voice-changer/sse")
+        response = httpx.Response(500, request=request)
+        resp.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("server error", request=request, response=response)
+        )
         return resp
 
     async def __aexit__(self, *exc):
@@ -164,6 +181,41 @@ async def test_cartesia_uses_per_frame_model_id_as_voice():
 
     assert captured["data"]["voice[id]"] == "voice-xyz"
     assert captured["data"]["output_format[encoding]"] == "pcm_s16le"
+    await backend.aclose()
+
+
+async def test_cartesia_api_error_echoes_utterance_instead_of_raising():
+    # A failing clip must not raise out of push(): that would abort the gRPC
+    # stream and degrade the whole session. The utterance is echoed back instead.
+    backend = _cartesia()
+    backend._client.stream = MagicMock(return_value=_FakeErrorStream())
+
+    session = backend.open_session()
+    loud = _frame(10000)
+    await session.push(loud, 48000, "")  # onset
+    await session.push(_frame(0), 48000, "")  # silence 1
+    out = await session.push(_frame(0), 48000, "")  # silence 2 -> convert (API 500)
+
+    assert out, "errored clip should be echoed back, not dropped"
+    assert b"".join(out).startswith(loud)
+    await backend.aclose()
+
+
+async def test_cartesia_converts_on_max_utterance_without_pause():
+    # max_utterance_ms=60 / frame_ms=20 -> cut and convert after 3 buffered frames,
+    # even with no trailing silence (continuous speech).
+    backend = _cartesia(max_utterance_ms=60)
+    pcm_out = b"\x07\x00" * _FRAME_SAMPLES
+    backend._client.stream = MagicMock(return_value=_FakeStream(_sse_lines(pcm_out)))
+
+    session = backend.open_session()
+    loud = _frame(10000)
+    assert await session.push(loud, 48000, "") == []  # 1 buffered
+    assert await session.push(loud, 48000, "") == []  # 2 buffered
+    out = await session.push(loud, 48000, "")  # 3rd hits the max -> convert
+
+    assert out == [pcm_out]
+    backend._client.stream.assert_called_once()
     await backend.aclose()
 
 

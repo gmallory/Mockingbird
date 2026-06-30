@@ -52,7 +52,9 @@ def _rms_normalized(pcm: bytes) -> float:
         return 0.0
     if len(pcm) % 2:  # defensive: frombuffer needs whole Int16 samples
         pcm = pcm[:-1]
-    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float64)
+    # float32 is ample for a 0..1 energy gate and halves the per-frame array
+    # allocation this runs on every 20ms frame.
+    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
     if samples.size == 0:
         return 0.0
     return float(np.sqrt(np.mean(np.square(samples)))) / 32768.0
@@ -179,20 +181,32 @@ class CartesiaBackend(InferenceBackend):
             "output_format[sample_rate]": str(sample_rate),
         }
 
-        out = bytearray()
-        async with self._client.stream(
-            "POST", _VOICE_CHANGER_SSE_PATH, files=files, data=data
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                event = json.loads(line[len("data:") :].strip())
-                if event.get("done"):
-                    break
-                chunk = event.get("data")
-                if chunk:
-                    out += base64.b64decode(chunk)
+        try:
+            out = bytearray()
+            async with self._client.stream(
+                "POST", _VOICE_CHANGER_SSE_PATH, files=files, data=data
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        event = json.loads(line[len("data:") :].strip())
+                    except json.JSONDecodeError:
+                        continue  # skip keep-alives / non-JSON data: lines
+                    # Read the chunk before checking `done`: a terminal event may
+                    # carry the final audio alongside done=true.
+                    chunk = event.get("data")
+                    if chunk:
+                        out += base64.b64decode(chunk)
+                    if event.get("done"):
+                        break
+        except (httpx.HTTPError, ValueError) as exc:
+            # One bad clip must not kill the session. Log and echo this utterance
+            # back unchanged so conversion resumes on the next utterance, instead
+            # of aborting the gRPC stream and degrading the whole session.
+            log.warning("cartesia.convert_failed", error=str(exc))
+            return _rechunk(pcm, frame_bytes)
 
         return _rechunk(bytes(out), frame_bytes)
 

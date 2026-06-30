@@ -44,15 +44,19 @@ class InferenceSession:
             raise InferenceUnavailable(f"inference unreachable: {exc}") from exc
         self._call = self._stub.Convert()
 
-    async def send(self, pcm: bytes, sample_rate: int, model_id: str) -> None:
+    def _require_call(self):
         if self._call is None:
             raise InferenceUnavailable("inference stream not open")
+        return self._call
+
+    async def send(self, pcm: bytes, sample_rate: int, model_id: str) -> None:
+        call = self._require_call()
         frame = audio_pb2.AudioFrame(pcm=pcm, sample_rate=sample_rate, model_id=model_id or "")
         try:
             # Bound the write: gRPC HTTP/2 flow control blocks the write when the
             # server stops reading, and send() runs on the WS receive loop, so an
             # unbounded write would freeze the whole session instead of degrading.
-            await asyncio.wait_for(self._call.write(frame), self._timeout_s)
+            await asyncio.wait_for(call.write(frame), self._timeout_s)
         except TimeoutError as exc:
             raise InferenceUnavailable(
                 f"inference write timed out after {self._timeout_s}s"
@@ -62,11 +66,10 @@ class InferenceSession:
 
     async def outputs(self):
         """Yield converted frames as they arrive, until the stream ends."""
-        if self._call is None:
-            raise InferenceUnavailable("inference stream not open")
+        call = self._require_call()
         try:
             while True:
-                response = await self._call.read()
+                response = await call.read()
                 if response is grpc.aio.EOF:
                     break
                 yield response.pcm

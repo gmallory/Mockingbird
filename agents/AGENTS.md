@@ -72,7 +72,6 @@ Server → Client (JSON):
   { "type": "ready", "latencyMs": 172 }
   { "type": "model_loaded", "modelId": "<uuid>" }
   { "type": "error", "code": "<error_code>", "message": "<description>" }
-  { "type": "metrics", "latencyMs": 165, "framesProcessed": 1500 }
   { "type": "degraded", "message": "<why transform is unavailable>" }
   { "type": "pong" }
 ```
