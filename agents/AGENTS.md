@@ -158,5 +158,6 @@ All agents should reference the shared Pydantic/SQLModel models defined in `gate
 
 ## Key Reference Documents
 
+- [Roadmap & Milestones](../docs/ROADMAP.md) — Build-order milestones, current state, and the concrete next steps (start here when picking up work)
 - [Product Specification](../docs/PRODUCT_SPEC.md) — Architecture, data models, API design, latency budgets
 - [README](../README.md) — Project overview, getting started, tech stack
