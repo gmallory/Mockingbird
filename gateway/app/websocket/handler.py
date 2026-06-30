@@ -76,8 +76,12 @@ async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2
                 await send_bytes(out)
         except InferenceUnavailable:
             await degrade()
-        except Exception:  # noqa: BLE001 - socket closing/teardown: the reader just stops
-            pass
+        except Exception:  # noqa: BLE001 - unexpected reader failure: degrade so the client keeps getting audio
+            # CancelledError is a BaseException, so shutdown cancellation still
+            # propagates past this. Suppress any secondary send failure when the
+            # socket is already closing during teardown.
+            with contextlib.suppress(Exception):
+                await degrade()
 
     try:
         # First message should be `start`, but we stay lenient: signal readiness.

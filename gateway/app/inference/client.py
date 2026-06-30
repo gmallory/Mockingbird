@@ -49,7 +49,14 @@ class InferenceSession:
             raise InferenceUnavailable("inference stream not open")
         frame = audio_pb2.AudioFrame(pcm=pcm, sample_rate=sample_rate, model_id=model_id or "")
         try:
-            await self._call.write(frame)
+            # Bound the write: gRPC HTTP/2 flow control blocks the write when the
+            # server stops reading, and send() runs on the WS receive loop, so an
+            # unbounded write would freeze the whole session instead of degrading.
+            await asyncio.wait_for(self._call.write(frame), self._timeout_s)
+        except TimeoutError as exc:
+            raise InferenceUnavailable(
+                f"inference write timed out after {self._timeout_s}s"
+            ) from exc
         except grpc.aio.AioRpcError as exc:
             raise InferenceUnavailable(str(exc)) from exc
 
