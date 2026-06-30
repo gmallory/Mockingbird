@@ -38,8 +38,8 @@ async def create_voice(
         result = await inference_http.clone_voice(
             base_url=settings.inference_service_url,
             clip=clip_bytes,
-            filename=clip.filename or "clip",
-            content_type=clip.content_type or "application/octet-stream",
+            filename=clip.filename,
+            content_type=clip.content_type,
             name=label,
             language=language,
         )

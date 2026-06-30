@@ -66,9 +66,12 @@ async def clone_voice(
         try:
             resp = await client.post(_CLONE_PATH, files=files, data=data)
             resp.raise_for_status()
-        except httpx.HTTPError as exc:
+            meta = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            # ValueError covers a 2xx with a non-JSON body (resp.json() raises
+            # json.JSONDecodeError, a ValueError that is not an httpx.HTTPError);
+            # surface it as the same 502 as every other Cartesia failure.
             raise HTTPException(status_code=502, detail=f"cartesia clone failed: {exc}") from exc
-        meta = resp.json()
 
     voice_id = meta.get("id")
     if not voice_id:

@@ -17,8 +17,8 @@ class InferenceHTTPError(Exception):
 async def clone_voice(
     base_url: str,
     clip: bytes,
-    filename: str,
-    content_type: str,
+    filename: str | None,
+    content_type: str | None,
     name: str,
     language: str,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -34,6 +34,9 @@ async def clone_voice(
         try:
             resp = await client.post("/voices", files=files, data=data)
             resp.raise_for_status()
-        except httpx.HTTPError as exc:
+            return resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            # ValueError covers a 2xx with a non-JSON body (resp.json() raises
+            # json.JSONDecodeError, a ValueError that is not an httpx.HTTPError);
+            # fold it into the same clean 502 instead of leaking a 500.
             raise InferenceHTTPError(str(exc)) from exc
-        return resp.json()

@@ -69,23 +69,26 @@ async def test_voice_roundtrip() -> None:
 async def test_create_and_list_voice(monkeypatch) -> None:
     engine = create_engine()
     factory = create_session_factory(engine)
-    await _ensure_schema(engine)
-
-    async def _override_session():
-        async with factory() as session:
-            yield session
-
-    async def _fake_clone(**kwargs):
-        # Assert the route forwarded the label as the clone name + the clip bytes.
-        assert kwargs["name"] == "Alice"
-        assert kwargs["clip"] == b"RIFFDATA"
-        return {"voice_id": "vid_abc", "name": kwargs["name"], "language": kwargs["language"]}
-
-    app.dependency_overrides[get_session] = _override_session
-    monkeypatch.setattr(inference_http, "clone_voice", _fake_clone)
-
     created_id = None
     try:
+        # Inside the try so a schema skip (Postgres down) still hits the finally
+        # that disposes the engine and clears the override on the shared app
+        # singleton — same pattern as test_voice_roundtrip / test_db.py.
+        await _ensure_schema(engine)
+
+        async def _override_session():
+            async with factory() as session:
+                yield session
+
+        async def _fake_clone(**kwargs):
+            # Assert the route forwarded the label as the clone name + the clip bytes.
+            assert kwargs["name"] == "Alice"
+            assert kwargs["clip"] == b"RIFFDATA"
+            return {"voice_id": "vid_abc", "name": kwargs["name"], "language": kwargs["language"]}
+
+        app.dependency_overrides[get_session] = _override_session
+        monkeypatch.setattr(inference_http, "clone_voice", _fake_clone)
+
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(
