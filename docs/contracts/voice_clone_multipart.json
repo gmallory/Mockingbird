@@ -1,0 +1,5 @@
+{
+  "file_field": "clip",
+  "form_fields": ["name", "language"],
+  "response_fields": ["voice_id", "name", "language"]
+}

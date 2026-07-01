@@ -13,6 +13,7 @@ import httpx
 import pytest
 from sqlmodel import SQLModel, select
 
+from app.config import settings
 from app.db.models import Voice
 from app.db.session import create_engine, create_session_factory, get_session
 from app.inference import http as inference_http
@@ -110,6 +111,72 @@ async def test_create_and_list_voice(monkeypatch) -> None:
         try:
             if created_id is not None:
                 await _delete_voice(factory, UUID(created_id))
+        finally:
+            await engine.dispose()
+
+
+async def test_create_voice_rejects_oversized_clip(monkeypatch) -> None:
+    # Fails before the session is touched (cap check runs before the clone call),
+    # so a dummy session that would raise on any DB access is fine here.
+    async def _override_session():
+        yield object()
+
+    monkeypatch.setattr(settings, "max_clip_bytes", 8)
+    app.dependency_overrides[get_session] = _override_session
+
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/voices",
+                files={"clip": ("sample.wav", b"x" * 9, "audio/wav")},
+                data={"label": "Bob", "language": "en"},
+            )
+        assert resp.status_code == 413
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_create_voice_rejects_duplicate_voice_id(monkeypatch) -> None:
+    engine = create_engine()
+    factory = create_session_factory(engine)
+    created_ids = []
+    try:
+        await _ensure_schema(engine)
+
+        async def _override_session():
+            async with factory() as session:
+                yield session
+
+        async def _fake_clone(**kwargs):
+            # Both clone calls mint the same voice_id, simulating a retried/
+            # double-submitted request.
+            return {"voice_id": "vid_dup", "name": kwargs["name"], "language": kwargs["language"]}
+
+        app.dependency_overrides[get_session] = _override_session
+        monkeypatch.setattr(inference_http, "clone_voice", _fake_clone)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first = await client.post(
+                "/voices",
+                files={"clip": ("sample.wav", b"RIFFDATA", "audio/wav")},
+                data={"label": "Alice", "language": "en"},
+            )
+            assert first.status_code == 200
+            created_ids.append(UUID(first.json()["id"]))
+
+            second = await client.post(
+                "/voices",
+                files={"clip": ("sample.wav", b"RIFFDATA", "audio/wav")},
+                data={"label": "Alice Again", "language": "en"},
+            )
+            assert second.status_code == 409
+    finally:
+        app.dependency_overrides.clear()
+        try:
+            for voice_id in created_ids:
+                await _delete_voice(factory, voice_id)
         finally:
             await engine.dispose()
 

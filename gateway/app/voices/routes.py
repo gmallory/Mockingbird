@@ -7,6 +7,7 @@ hot path — this is a one-shot upload, not the 20ms stream.
 """
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -25,6 +26,22 @@ async def list_voices(session: AsyncSession = Depends(get_session)) -> list[Voic
     return list(result.scalars().all())
 
 
+async def _read_clip(clip: UploadFile) -> bytes:
+    """Read the upload in chunks, aborting once it exceeds ``max_clip_bytes``.
+
+    Bounds memory use regardless of what (if anything) the client's Content-Length
+    header claims — this route is unauthenticated pre-M5.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await clip.read(1 << 16):
+        total += len(chunk)
+        if total > settings.max_clip_bytes:
+            raise HTTPException(status_code=413, detail="clip exceeds max_clip_bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @router.post("/voices")
 async def create_voice(
     clip: UploadFile = File(...),
@@ -33,7 +50,7 @@ async def create_voice(
     session: AsyncSession = Depends(get_session),
 ) -> Voice:
     """Clone a voice from the uploaded clip and persist it in the registry."""
-    clip_bytes = await clip.read()
+    clip_bytes = await _read_clip(clip)
     if not clip_bytes:
         raise HTTPException(status_code=400, detail="clip is empty")
     try:
@@ -54,6 +71,14 @@ async def create_voice(
 
     voice = Voice(voice_id=voice_id, label=label, language=language)
     session.add(voice)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        # Cartesia mints a fresh id per clone call, so this means a retried/
+        # double-submitted request raced its own earlier insert.
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail=f"voice {voice_id} is already registered"
+        ) from exc
     await session.refresh(voice)
     return voice

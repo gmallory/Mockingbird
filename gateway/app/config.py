@@ -38,5 +38,9 @@ class Settings(BaseSettings):
     # InferenceUnavailable so the session degrades to passthrough promptly.
     inference_timeout_ms: int = 2000
 
+    # Cap on an uploaded clone clip so POST /voices (unauthenticated pre-M5) can't
+    # be used to exhaust memory with an oversized body.
+    max_clip_bytes: int = 10 * 1024 * 1024
+
 
 settings = Settings()
