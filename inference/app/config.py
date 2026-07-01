@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Target voice used when a frame carries no model_id. Until per-frame model
     # routing lands, the cartesia backend needs a configured default.
     cartesia_voice_id: str = ""
+    # Cap on an uploaded clone clip so POST /voices (unauthenticated pre-M5) can't
+    # be used to exhaust memory with an oversized body.
+    max_clip_bytes: int = 10 * 1024 * 1024
 
     # Utterance segmentation (cartesia backend). Cartesia's voice changer is
     # clip-based, so we group input frames into utterances with a simple energy

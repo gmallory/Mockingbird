@@ -35,6 +35,26 @@ log = structlog.get_logger(__name__)
 _VOICE_CHANGER_SSE_PATH = "/voice-changer/sse"
 
 
+def cartesia_client(
+    *,
+    api_key: str,
+    base_url: str,
+    version: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> httpx.AsyncClient:
+    """Build the Cartesia httpx client (bearer auth, version header, timeout).
+
+    Shared by the long-lived voice-changer client here and the per-request clone
+    client in ``app/voices.py`` — both talk to the same Cartesia auth surface.
+    """
+    return httpx.AsyncClient(
+        base_url=base_url,
+        headers={"Authorization": f"Bearer {api_key}", "Cartesia-Version": version},
+        transport=transport,
+        timeout=httpx.Timeout(30.0, connect=10.0),
+    )
+
+
 def _pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
     """Wrap mono Int16 PCM in a minimal WAV container (the endpoint wants a file)."""
     buf = io.BytesIO()
@@ -153,12 +173,7 @@ class CartesiaBackend(InferenceBackend):
         self.silence_frames = max(1, round(silence_ms / frame_ms))
         self.max_utterance_frames = max(1, round(max_utterance_ms / frame_ms))
         self.preroll_frames = max(0, round(preroll_ms / frame_ms))
-        self._client = httpx.AsyncClient(
-            base_url=base_url,
-            # Cartesia's current spec authenticates with a bearer API key.
-            headers={"Authorization": f"Bearer {api_key}", "Cartesia-Version": version},
-            timeout=httpx.Timeout(30.0, connect=10.0),
-        )
+        self._client = cartesia_client(api_key=api_key, base_url=base_url, version=version)
 
     def open_session(self) -> BackendSession:
         return _CartesiaSession(self)

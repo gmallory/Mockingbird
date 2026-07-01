@@ -1,9 +1,11 @@
 """Clone route tests.
 
 The route forwards an uploaded clip to Cartesia /voices/clone and returns the
-minted voice id. Cartesia is mocked with an httpx.MockTransport (injected via the
-module's ``_transport`` seam) so no network or API key is needed; the inbound
-request is driven through the app with httpx.ASGITransport.
+minted voice id. Cartesia is mocked with an httpx.MockTransport, injected via
+FastAPI's ``app.dependency_overrides`` on the ``voices._get_transport`` dependency
+(same pattern gateway/tests/test_voices.py uses for ``get_session``), so no network
+or API key is needed; the inbound request is driven through the app with
+httpx.ASGITransport.
 """
 
 import httpx
@@ -34,15 +36,18 @@ async def test_clone_returns_voice_id(monkeypatch):
         assert b"RIFFDATA" in request.content
         return httpx.Response(200, json={"id": "vid_123", "name": "My Voice", "language": "en"})
 
-    monkeypatch.setattr(voices, "_transport", httpx.MockTransport(handler))
+    app.dependency_overrides[voices._get_transport] = lambda: httpx.MockTransport(handler)
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/voices",
-            files={"clip": ("sample.wav", b"RIFFDATA", "audio/wav")},
-            data={"name": "My Voice", "language": "en"},
-        )
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/voices",
+                files={"clip": ("sample.wav", b"RIFFDATA", "audio/wav")},
+                data={"name": "My Voice", "language": "en"},
+            )
+    finally:
+        app.dependency_overrides.clear()
 
     assert resp.status_code == 200
     assert resp.json() == {"voice_id": "vid_123", "name": "My Voice", "language": "en"}
@@ -83,14 +88,32 @@ async def test_clone_surfaces_cartesia_error(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "bad key"})
 
-    monkeypatch.setattr(voices, "_transport", httpx.MockTransport(handler))
+    app.dependency_overrides[voices._get_transport] = lambda: httpx.MockTransport(handler)
+
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/voices",
+                files={"clip": ("sample.wav", b"x", "audio/wav")},
+                data={"name": "n", "language": "en"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 502
+
+
+async def test_clone_rejects_oversized_clip(monkeypatch):
+    _configure_cartesia(monkeypatch)
+    monkeypatch.setattr(voices.settings, "max_clip_bytes", 8)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/voices",
-            files={"clip": ("sample.wav", b"x", "audio/wav")},
+            files={"clip": ("sample.wav", b"x" * 9, "audio/wav")},
             data={"name": "n", "language": "en"},
         )
 
-    assert resp.status_code == 502
+    assert resp.status_code == 413
