@@ -2,9 +2,10 @@
 name: respond-to-copilot-review
 description: >-
   Triage and respond to GitHub Copilot's automated pull-request review comments.
-  Fetches the unresolved comments Copilot left on a PR, decides which are worth
-  fixing, applies the code changes, and drafts a reply for every thread — then
-  pauses and shows you everything before anything is pushed or posted to GitHub.
+  Requests a Copilot review if one hasn't run yet and waits for it to finish,
+  then fetches the unresolved comments Copilot left on a PR, decides which are
+  worth fixing, applies the code changes, and drafts a reply for every thread —
+  then pauses and shows you everything before anything is pushed or posted.
   Use this whenever the user mentions Copilot's review, Copilot PR comments, the
   bot's feedback on a pull request, "address/respond to/reply to the Copilot
   review", or wants to handle, resolve, or act on automated reviewer comments on
@@ -39,7 +40,25 @@ gh pr view --json number,headRefName,url
 
 State which PR you're acting on so there's no ambiguity.
 
-### 2. Gather the unresolved Copilot threads
+### 2. Ensure a Copilot review exists, and wait for it
+
+Run the bundled helper before triaging. It requests a Copilot review only if one
+isn't already done or pending, then blocks until Copilot submits — a single call,
+don't loop it yourself:
+
+```bash
+.claude/skills/respond-to-copilot-review/scripts/request_copilot_review.sh [PR_NUMBER]
+```
+
+Last line is a JSON status:
+
+- `{"status":"already_done",...}` — already reviewed, nothing requested. Proceed.
+- `{"status":"completed",...}` — was missing/pending; helper requested (if needed)
+  and waited. Proceed.
+- `{"status":"timeout",...}` — didn't finish within timeout (default 600s, tune
+  via `POLL_TIMEOUT`/`POLL_INTERVAL`). Tell the user it's still pending and stop.
+
+### 3. Gather the unresolved Copilot threads
 
 Run the bundled helper. It returns the unresolved Copilot threads as JSON — each with
 the `threadId` (for resolving later), the `commentId` (for replying), and the `path`,
@@ -58,7 +77,7 @@ case-insensitively so neither form slips through, and it drops already-resolved
 threads so you never re-litigate a closed comment. If it returns `[]`, tell the user
 there's nothing unresolved from Copilot and stop.
 
-### 3. Triage each comment
+### 4. Triage each comment
 
 For every thread, open the cited code at `path:line`, read enough surrounding context
 to understand it, and judge the comment on its merits. Sort into three buckets:
@@ -74,14 +93,14 @@ Judge against the codebase, not the comment's confidence. Copilot sometimes flag
 a documented convention (check `CLAUDE.md` / agent specs). When a comment is right,
 fix the **root cause**, not just the single line it happened to point at.
 
-### 4. Apply the fixes
+### 5. Apply the fixes
 
 Make the edits for every **Fix** item, grouping comments that touch the same code so
 the change stays coherent. If the project has tests or a linter, run them and confirm
 they pass — a fix that breaks the build is worse than the comment it resolved. Show
 the command and its result as evidence rather than asserting success.
 
-### 5. Draft a reply for every thread
+### 6. Draft a reply for every thread
 
 One reply per thread, including the ones you are not changing, since an unanswered
 comment reads as ignored. Keep each reply short and factual.
@@ -102,7 +121,7 @@ parentheses). Aim for a terse developer comment, not an upbeat assistant.
 A wrong comment gets a plain correction. A right one gets a brief note of what changed.
 Do not be deferential for its own sake.
 
-### 6. STOP — show the plan, post nothing yet
+### 7. STOP — show the plan, post nothing yet
 
 Pushing commits and posting replies are outward-facing and awkward to undo, so they
 need an explicit go-ahead. Present one scannable summary and then wait:
@@ -115,7 +134,7 @@ need an explicit go-ahead. Present one scannable summary and then wait:
 Say plainly that the code edits exist locally but **nothing has been pushed or
 posted**, and ask whether to proceed. Let the user amend any verdict or reply first.
 
-### 7. Only after explicit approval: push, then reply
+### 8. Only after explicit approval: push, then reply
 
 Push the commits, then post one reply per thread using its `commentId`:
 
@@ -141,6 +160,7 @@ gh api graphql -f query='
 | Need | Command |
 |------|---------|
 | Current branch's PR | `gh pr view --json number,url` |
+| Request Copilot review + wait | `.claude/skills/respond-to-copilot-review/scripts/request_copilot_review.sh [PR]` |
 | Unresolved Copilot threads (JSON) | `.claude/skills/respond-to-copilot-review/scripts/list_copilot_threads.sh [PR]` |
 | Reply to a comment | `gh api --method POST repos/{owner}/{repo}/pulls/{PR}/comments/{COMMENT_ID}/replies -f body='…'` |
 | Resolve a thread | `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' -f t='THREAD_ID'` |
