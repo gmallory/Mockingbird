@@ -45,6 +45,8 @@ async def clone_voice(
     _require_cartesia()
 
     clip_bytes = await clip.read()
+    if not clip_bytes:
+        raise HTTPException(status_code=400, detail="clip is empty")
     files = {
         "clip": (
             clip.filename or "clip",

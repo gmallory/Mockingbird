@@ -34,6 +34,8 @@ async def create_voice(
 ) -> Voice:
     """Clone a voice from the uploaded clip and persist it in the registry."""
     clip_bytes = await clip.read()
+    if not clip_bytes:
+        raise HTTPException(status_code=400, detail="clip is empty")
     try:
         result = await inference_http.clone_voice(
             base_url=settings.inference_service_url,
