@@ -1,10 +1,10 @@
 """Gateway database models (SQLModel).
 
-Slim M2 ships only ``User`` — the FK root that the rest of the schema hangs off,
-and enough to prove the migration + async-session roundtrip end to end. The
-``VoiceModel`` and ``CallRecord`` tables from agents/gateway.agent.md are
-intentionally deferred to the milestone that first reads them (M3 / M5), rather
-than standing up tables nothing consumes yet.
+``User`` (M2) is the FK root that the rest of the schema hangs off. ``Voice`` (M4b)
+is the single-user voice registry: one row per cloned Cartesia voice, persisted so
+a speaker can be rendered as it on the streaming path. Per-user ownership (an FK to
+``User``) and the ``CallRecord`` table from agents/gateway.agent.md are deferred to
+the milestone that first reads them (M5 auth / M8 calling).
 """
 
 from datetime import UTC, datetime
@@ -60,3 +60,18 @@ class User(SQLModel, table=True):
         sa_type=DateTime(timezone=True),
         sa_column_kwargs={"onupdate": _utcnow},
     )
+
+
+class Voice(SQLModel, table=True):
+    """A cloned voice in the single-user registry (M4b).
+
+    ``voice_id`` is the Cartesia id minted by the inference clone route; it feeds
+    straight into the voice-changer ``voice[id]`` when this voice is selected.
+    ``label`` is the human name shown in the UI (M4c).
+    """
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    voice_id: str
+    label: str
+    language: str
+    created_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))

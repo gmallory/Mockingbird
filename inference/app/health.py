@@ -15,6 +15,7 @@ from app.backends import get_backend
 from app.config import settings
 from app.logging import configure_logging
 from app.server import create_server
+from app.voices import router as voices_router
 
 log = structlog.get_logger(__name__)
 
@@ -37,6 +38,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Mockingbird Inference", version="0.1.0", lifespan=lifespan)
+app.include_router(voices_router)
 
 
 @app.get("/healthz")

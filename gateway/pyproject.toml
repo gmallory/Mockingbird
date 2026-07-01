@@ -11,6 +11,7 @@ dependencies = [
     "greenlet>=3.5.3",
     "grpcio>=1.81.1",
     "pydantic-settings>=2.14.2",
+    "python-multipart>=0.0.32",
     "redis>=8.0.1",
     "sqlmodel>=0.0.39",
     "structlog>=26.1.0",
@@ -33,6 +34,11 @@ extend-exclude = ["app/proto_gen"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+# FastAPI's dependency-injection markers (Depends/File/Form/...) are
+# call-in-default by design; B008 must not flag them.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File", "fastapi.Form"]
 
 [tool.ruff.lint.per-file-ignores]
 # Generated migrations always import sqlmodel from the template; it's unused in
