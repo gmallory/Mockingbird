@@ -29,3 +29,34 @@ export function int16ToFloat(int16) {
   }
   return out;
 }
+
+/**
+ * Encode mono Int16 PCM as a 16-bit WAV (44-byte header + data). Used by the
+ * Voice Studio to package a recorded clone sample for upload.
+ * @param {Int16Array} int16
+ * @param {number} sampleRate
+ * @returns {ArrayBuffer}
+ */
+export function encodeWav(int16, sampleRate) {
+  const dataBytes = int16.length * 2;
+  const buffer = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(buffer);
+  const writeStr = (offset, s) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataBytes, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM header size
+  view.setUint16(20, 1, true); // format = PCM
+  view.setUint16(22, 1, true); // channels = mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate = sampleRate * blockAlign
+  view.setUint16(32, 2, true); // block align = channels * 2 bytes
+  view.setUint16(34, 16, true); // bits per sample
+  writeStr(36, "data");
+  view.setUint32(40, dataBytes, true);
+  new Int16Array(buffer, 44).set(int16);
+  return buffer;
+}

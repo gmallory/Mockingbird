@@ -31,5 +31,17 @@ async def monitor(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "pages/monitor.html",
-        {"public_ws_url": settings.public_ws_url},
+        {
+            "public_ws_url": settings.public_ws_url,
+            "public_gateway_url": settings.public_gateway_url,
+        },
+    )
+
+
+@app.get("/studio", response_class=HTMLResponse)
+async def studio(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "pages/studio.html",
+        {"public_gateway_url": settings.public_gateway_url},
     )

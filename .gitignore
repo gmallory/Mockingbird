@@ -208,3 +208,8 @@ __marimo__/
 
 # Claude Code local overrides
 CLAUDE.local.md
+
+# Voice-changer spike audio (throwaway, not versioned)
+/spike_listen/
+/spike_control/
+*.m4a

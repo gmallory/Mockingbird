@@ -55,6 +55,15 @@ export class AudioEngine {
     this.inputLevel = new LevelSmoother();
     this.outputLevel = new LevelSmoother();
 
+    // Utterance latency (cloned-voice / walkie-talkie mode): end of speech (last
+    // loud input frame) -> first output frame of the converted burst. The FIFO
+    // RTT above is only meaningful for the 1:1 echo loop; under utterance
+    // conversion, receives are bursty and unaligned to sends.
+    this._lastLoudAt = 0;
+    this._lastRecvAt = 0;
+    /** @type {number[]} */
+    this._uttSamples = [];
+
     /** @type {Map<string, Set<Function>>} */
     this._handlers = new Map();
     this._latencyTimer = null;
@@ -154,6 +163,9 @@ export class AudioEngine {
     this.audioContext = null;
     this.mediaStream = null;
     this.latency.reset();
+    this._uttSamples = [];
+    this._lastLoudAt = 0;
+    this._lastRecvAt = 0;
     this._emit("connection", "disconnected");
   }
 
@@ -186,6 +198,16 @@ export class AudioEngine {
   getLatency() {
     return this.latency.stats();
   }
+  getUtteranceLatency() {
+    if (this._uttSamples.length === 0) return { last: 0, p50: 0, p95: 0 };
+    const sorted = [...this._uttSamples].sort((a, b) => a - b);
+    const pct = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+    return {
+      last: this._uttSamples[this._uttSamples.length - 1],
+      p50: pct(0.5),
+      p95: pct(0.95),
+    };
+  }
   getInputLevel() {
     return this.inputLevel.value;
   }
@@ -202,6 +224,9 @@ export class AudioEngine {
       this.wsWorker?.postMessage({ type: "audio", data: data.data }, [data.data.buffer]);
     } else if (data.type === "level") {
       this.inputLevel.push(data.rms);
+      // Last moment the speaker was clearly talking (matches the server VAD's
+      // ~0.02 energy gate) — the "end of speech" reference for utterance latency.
+      if (data.rms > 0.02) this._lastLoudAt = performance.now();
     }
   }
 
@@ -225,10 +250,22 @@ export class AudioEngine {
       case "error":
         this._emit("error", data.message || "connection error");
         break;
-      case "audio":
+      case "audio": {
+        const now = performance.now();
+        // A gap since the last received frame marks the start of a new output
+        // burst — the server just finished converting an utterance.
+        if (now - this._lastRecvAt > 300 && this._lastLoudAt > 0) {
+          const ms = now - this._lastLoudAt;
+          if (ms > 0 && ms < 20000) {
+            this._uttSamples.push(ms);
+            if (this._uttSamples.length > 50) this._uttSamples.shift();
+          }
+        }
+        this._lastRecvAt = now;
         this.latency.markReceived();
         this.playbackNode?.port.postMessage({ type: "audio", data: data.data }, [data.data.buffer]);
         break;
+      }
       case "control": {
         // ready / pong / model_loaded / degraded / error.
         const ctrl = data.data;
@@ -240,7 +277,10 @@ export class AudioEngine {
   }
 
   _startMeters() {
-    this._latencyTimer = setInterval(() => this._emit("latency", this.latency.stats()), 500);
+    this._latencyTimer = setInterval(() => {
+      this._emit("latency", this.latency.stats());
+      this._emit("utteranceLatency", this.getUtteranceLatency());
+    }, 500);
     this._levelTimer = setInterval(
       () => this._emit("level", { input: this.inputLevel.value, output: this.outputLevel.value }),
       80,
