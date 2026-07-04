@@ -201,7 +201,7 @@ export class AudioEngine {
   getUtteranceLatency() {
     if (this._uttSamples.length === 0) return { last: 0, p50: 0, p95: 0 };
     const sorted = [...this._uttSamples].sort((a, b) => a - b);
-    const pct = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+    const pct = (q) => sorted[Math.floor(q * (sorted.length - 1))];
     return {
       last: this._uttSamples[this._uttSamples.length - 1],
       p50: pct(0.5),

@@ -56,21 +56,32 @@ export class VoiceRecorder {
         autoGainControl: true,
       },
     });
-    this.audioContext = new AudioContext({ sampleRate: this.sampleRate });
-    if (this.audioContext.state === "suspended") await this.audioContext.resume();
-    await this.audioContext.audioWorklet.addModule(`${BASE}/processors/voice-capture.worklet.js`);
+    try {
+      this.audioContext = new AudioContext({ sampleRate: this.sampleRate });
+      if (this.audioContext.state === "suspended") await this.audioContext.resume();
+      await this.audioContext.audioWorklet.addModule(`${BASE}/processors/voice-capture.worklet.js`);
 
-    this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
-    this.captureNode = new AudioWorkletNode(this.audioContext, "voice-capture", {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      channelCount: 1,
-      processorOptions: { chunkSize },
-    });
-    this.captureNode.port.onmessage = (e) => this._onMessage(e.data);
-    // The capture worklet emits no audio, so routing to destination just keeps it
-    // pulled by the render graph (no feedback), same as the live engine does.
-    this.sourceNode.connect(this.captureNode).connect(this.audioContext.destination);
+      this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
+      this.captureNode = new AudioWorkletNode(this.audioContext, "voice-capture", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        channelCount: 1,
+        processorOptions: { chunkSize },
+      });
+      this.captureNode.port.onmessage = (e) => this._onMessage(e.data);
+      // The capture worklet emits no audio, so routing to destination just keeps it
+      // pulled by the render graph (no feedback), same as the live engine does.
+      this.sourceNode.connect(this.captureNode).connect(this.audioContext.destination);
+    } catch (err) {
+      // Setup failed after the mic opened; release it so the mic indicator clears.
+      this.mediaStream?.getTracks().forEach((t) => t.stop());
+      if (this.audioContext && this.audioContext.state !== "closed") {
+        await this.audioContext.close();
+      }
+      this.mediaStream = null;
+      this.audioContext = null;
+      throw err;
+    }
   }
 
   _onMessage(data) {

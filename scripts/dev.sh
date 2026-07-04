@@ -22,7 +22,9 @@ if [[ "$INFERENCE_BACKEND" == "cartesia" && ! -f inference/.env ]]; then
 fi
 
 echo "==> infra: postgres + redis"
-docker compose -f infrastructure/docker-compose.yml up -d --wait
+# Only the infra deps — the app services below run via uv, not compose, so
+# starting them here too would bind :8001/:3001/:3000 and collide with them.
+docker compose -f infrastructure/docker-compose.yml up -d --wait postgres redis
 
 echo "==> gateway: alembic upgrade head"
 uv run --directory gateway alembic upgrade head

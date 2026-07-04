@@ -32,6 +32,7 @@ import base64
 import json
 import shutil
 import subprocess
+import tempfile
 import time
 import wave
 from pathlib import Path
@@ -42,11 +43,8 @@ import numpy as np
 from app.backends.cartesia import CartesiaBackend, cartesia_client
 from app.config import settings
 
-# Keep converted audio out of the repo tree — this is throwaway spike output.
-SCRATCH = Path(
-    "/private/tmp/claude-501/-Users-garrettmallory-Code-Mockingbird"
-    "/50b29677-7615-4e59-8d22-b6489759c1fe/scratchpad/spike_out"
-)
+# Keep converted audio out of the repo tree; this is throwaway spike output.
+SCRATCH = Path(tempfile.gettempdir()) / "mockingbird-spike-out"
 
 
 def _require_key() -> None:
