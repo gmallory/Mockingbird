@@ -1,10 +1,11 @@
-# Mockingbird — local development infrastructure (CPU-only).
+# Mockingbird — local development stack (CPU-only, no GPU).
 #
-# Slim M2 stands up the two services the gateway wires into now: Postgres for
-# persistence and Redis for sessions/health. MinIO (S3-compatible object store)
-# is deferred to M3, where reference-audio storage is its first consumer.
+# Postgres + Redis plus the three app services (inference, gateway, frontend),
+# each built from its own Dockerfile. Inference uses Cartesia by default and reads
+# CARTESIA_API_KEY from ../inference/.env; override with INFERENCE_BACKEND=passthrough.
 #
-#   docker compose up -d
+#   docker compose -f infrastructure/docker-compose.yml up --build
+#   # then open http://localhost:3000/studio
 #
 # Compose v2 ignores the legacy top-level `version:` key, so it is omitted.
 
@@ -36,6 +37,65 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # --- Application services (built from each service's Dockerfile) -----------
+
+  inference:
+    build: ../inference
+    environment:
+      INFERENCE_BACKEND: ${INFERENCE_BACKEND:-cartesia}
+    env_file:
+      - path: ../inference/.env
+        required: false
+    ports:
+      - "8001:8001"    # HTTP clone / health
+      - "50051:50051"  # gRPC audio stream
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # One-shot: apply gateway migrations before the gateway serves.
+  gateway-migrate:
+    build: ../gateway
+    command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mockingbird:dev_password@postgres:5432/mockingbird
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  gateway:
+    build: ../gateway
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mockingbird:dev_password@postgres:5432/mockingbird
+      REDIS_URL: redis://redis:6379
+      INFERENCE_GRPC_URL: inference:50051
+      INFERENCE_SERVICE_URL: http://inference:8001
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      gateway-migrate:
+        condition: service_completed_successfully
+      inference:
+        condition: service_started
+
+  frontend:
+    build: ../frontend
+    # PUBLIC_ urls are browser-facing, so they point at the host-mapped ports,
+    # not the internal service names.
+    environment:
+      PUBLIC_WS_URL: ws://localhost:3001/ws/voice
+      PUBLIC_GATEWAY_URL: http://localhost:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      gateway:
+        condition: service_started
 
 volumes:
   postgres_data:
