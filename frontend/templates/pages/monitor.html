@@ -12,15 +12,18 @@
   <div class="controls">
     <button id="toggle" class="btn" type="button">Start</button>
     <span id="conn" class="badge badge--idle">disconnected</span>
+    <select id="voice-select" class="select" title="Voice to convert into">
+      <option value="">Echo (no voice)</option>
+    </select>
   </div>
 
   <div class="metrics">
     <div class="metric">
-      <span class="metric__label">Roundtrip latency</span>
+      <span class="metric__label">Utterance latency</span>
       <span id="latency" class="metric__value latency--idle">—</span>
     </div>
     <div class="metric">
-      <span class="metric__label">P95</span>
+      <span class="metric__label">P95 (speech end → output)</span>
       <span id="latency-p95" class="metric__value">—</span>
     </div>
     <div class="metric">
@@ -46,6 +49,7 @@
   import { AudioEngine } from "/static/js/audio-engine/audio-engine.js";
 
   const WS_URL = {{ public_ws_url | tojson }};
+  const GATEWAY = {{ public_gateway_url | tojson }};
 
   const toggleBtn = document.getElementById("toggle");
   const connBadge = document.getElementById("conn");
@@ -54,25 +58,51 @@
   const inLevelEl = document.getElementById("in-level");
   const outLevelEl = document.getElementById("out-level");
   const statusEl = document.getElementById("status");
+  const voiceSelect = document.getElementById("voice-select");
 
   const engine = new AudioEngine({ websocketUrl: WS_URL });
   let running = false;
 
+  // Walkie-talkie scale: utterance latency is end-of-speech -> first output, in
+  // seconds (the <300ms per-frame budget belongs to the GPU path only).
   function latencyClass(ms) {
-    if (ms < 200) return "latency--good";
-    if (ms < 300) return "latency--warn";
+    if (ms < 1500) return "latency--good";
+    if (ms < 3000) return "latency--warn";
     return "latency--bad";
   }
+
+  async function loadVoices() {
+    try {
+      const resp = await fetch(`${GATEWAY}/voices`);
+      if (!resp.ok) return;
+      for (const v of await resp.json()) {
+        const opt = document.createElement("option");
+        opt.value = v.voice_id;
+        opt.textContent = v.label;
+        voiceSelect.appendChild(opt);
+      }
+    } catch {
+      /* selector stays echo-only if the registry is unreachable */
+    }
+  }
+
+  voiceSelect.addEventListener("change", () => {
+    engine.switchModel(voiceSelect.value || null);
+    statusEl.textContent = voiceSelect.value
+      ? `Voice set to "${voiceSelect.selectedOptions[0].textContent}". Speak a phrase, then pause.`
+      : "Echo mode — audio returns unchanged.";
+  });
 
   engine.on("connection", (status) => {
     connBadge.textContent = status;
     connBadge.className = "badge badge--" + (status === "connected" ? "ok" : "idle");
   });
 
-  engine.on("latency", ({ p50, p95 }) => {
-    latencyEl.textContent = p50.toFixed(0) + " ms";
-    latencyEl.className = "metric__value " + latencyClass(p50);
-    latencyP95El.textContent = p95.toFixed(0) + " ms";
+  engine.on("utteranceLatency", ({ last, p95 }) => {
+    if (!last) return;
+    latencyEl.textContent = (last / 1000).toFixed(2) + " s";
+    latencyEl.className = "metric__value " + latencyClass(last);
+    latencyP95El.textContent = p95 ? (p95 / 1000).toFixed(2) + " s" : "—";
   });
 
   engine.on("level", ({ input, output }) => {
@@ -95,7 +125,7 @@
     try {
       toggleBtn.disabled = true;
       statusEl.textContent = "Requesting microphone…";
-      await engine.start();
+      await engine.start(voiceSelect.value || null);
       running = true;
       toggleBtn.textContent = "Stop";
       statusEl.textContent = "Speak a phrase, then pause — you'll hear it back in the cloned voice " +
@@ -106,5 +136,7 @@
       toggleBtn.disabled = false;
     }
   });
+
+  loadVoices();
 </script>
 {% endblock %}

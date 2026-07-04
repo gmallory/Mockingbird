@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}Voice Studio — Mockingbird{% endblock %}
+
+{% block content %}
+<section class="studio">
+  <header>
+    <h1>Voice Studio</h1>
+    <p class="subtitle">Record ~15 seconds of your voice to clone it, then pick it on the Live Monitor.
+      Speak naturally at a normal volume in a quiet room.</p>
+  </header>
+
+  <div class="controls">
+    <button id="record" class="btn" type="button">Record</button>
+    <span id="rec-status" class="badge badge--idle">idle</span>
+    <span id="rec-time" class="rec-time">0.0s</span>
+  </div>
+
+  <div class="metric">
+    <span class="metric__label">Input level</span>
+    <div class="meter"><div id="rec-level" class="meter__fill"></div></div>
+  </div>
+  <p id="rec-warn" class="warn-note"></p>
+
+  <div class="clone-form">
+    <input id="label" class="input" type="text" placeholder="Voice name (e.g. My Voice)" />
+    <button id="clone" class="btn" type="button" disabled>Clone voice</button>
+  </div>
+  <p id="status" class="status"></p>
+
+  <h2 class="section-title">Registered voices</h2>
+  <ul id="voice-list" class="voice-list"><li class="muted">Loading…</li></ul>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { VoiceRecorder } from "/static/js/audio-engine/recorder.js";
+
+  const GATEWAY = {{ public_gateway_url | tojson }};
+  const MAX_SECONDS = 20;
+  const QUIET_PEAK = 0.03;
+
+  const recordBtn = document.getElementById("record");
+  const recStatus = document.getElementById("rec-status");
+  const recTime = document.getElementById("rec-time");
+  const recLevel = document.getElementById("rec-level");
+  const recWarn = document.getElementById("rec-warn");
+  const labelInput = document.getElementById("label");
+  const cloneBtn = document.getElementById("clone");
+  const statusEl = document.getElementById("status");
+  const voiceList = document.getElementById("voice-list");
+
+  let recorder = null;
+  let recording = false;
+  let takeBlob = null;
+  let startedAt = 0;
+  let timer = null;
+  let autoStop = null;
+
+  const setStatus = (msg) => { statusEl.textContent = msg; };
+
+  const escapeHtml = (s) =>
+    String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+    );
+
+  async function loadVoices() {
+    try {
+      const resp = await fetch(`${GATEWAY}/voices`);
+      if (!resp.ok) throw new Error(`GET /voices ${resp.status}`);
+      const voices = await resp.json();
+      if (!voices.length) {
+        voiceList.innerHTML = '<li class="muted">No voices yet — record one above.</li>';
+        return;
+      }
+      voiceList.innerHTML = voices
+        .map(
+          (v) =>
+            `<li><strong>${escapeHtml(v.label)}</strong> ` +
+            `<span class="muted">${escapeHtml(v.language)} · ${escapeHtml(v.voice_id)}</span></li>`,
+        )
+        .join("");
+    } catch (err) {
+      voiceList.innerHTML = `<li class="warn-note">Could not load voices: ${escapeHtml(String(err))}</li>`;
+    }
+  }
+
+  async function startRecording() {
+    recWarn.textContent = "";
+    takeBlob = null;
+    cloneBtn.disabled = true;
+    recorder = new VoiceRecorder();
+    recorder.on("level", (rms) => {
+      recLevel.style.width = Math.min(100, rms * 140).toFixed(0) + "%";
+    });
+    try {
+      await recorder.start();
+    } catch (err) {
+      setStatus("Mic error: " + (err?.message || err));
+      return;
+    }
+    recording = true;
+    startedAt = performance.now();
+    recordBtn.textContent = "Stop";
+    recStatus.textContent = "recording";
+    recStatus.className = "badge badge--ok";
+    setStatus("Recording — speak naturally.");
+    timer = setInterval(() => {
+      recTime.textContent = ((performance.now() - startedAt) / 1000).toFixed(1) + "s";
+    }, 100);
+    autoStop = setTimeout(stopRecording, MAX_SECONDS * 1000);
+  }
+
+  async function stopRecording() {
+    if (!recording) return;
+    recording = false;
+    clearInterval(timer);
+    clearTimeout(autoStop);
+    const take = await recorder.stop();
+    recordBtn.textContent = "Record";
+    recStatus.textContent = "idle";
+    recStatus.className = "badge badge--idle";
+    recLevel.style.width = "0%";
+    takeBlob = take.blob;
+    recTime.textContent = take.durationS.toFixed(1) + "s";
+    setStatus(
+      take.durationS < 2
+        ? "That was very short — record a few seconds for a good clone."
+        : `Recorded ${take.durationS.toFixed(1)}s. Name it, then clone.`,
+    );
+    if (take.peak < QUIET_PEAK) {
+      recWarn.textContent =
+        "⚠ That take is quiet — move closer or speak up and re-record for a better clone.";
+    }
+    cloneBtn.disabled = false;
+  }
+
+  recordBtn.addEventListener("click", () => (recording ? stopRecording() : startRecording()));
+
+  cloneBtn.addEventListener("click", async () => {
+    if (!takeBlob) return;
+    const label = labelInput.value.trim();
+    if (!label) {
+      setStatus("Give the voice a name first.");
+      return;
+    }
+    cloneBtn.disabled = true;
+    setStatus("Cloning… (calls Cartesia, ~a few seconds)");
+    try {
+      const form = new FormData();
+      form.append("clip", new File([takeBlob], "sample.wav", { type: "audio/wav" }));
+      form.append("label", label);
+      form.append("language", "en");
+      const resp = await fetch(`${GATEWAY}/voices`, { method: "POST", body: form });
+      if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+      const voice = await resp.json();
+      setStatus(`Cloned "${voice.label}" ✓ — pick it on the Live Monitor.`);
+      labelInput.value = "";
+      takeBlob = null;
+      await loadVoices();
+    } catch (err) {
+      setStatus("Clone failed: " + (err?.message || err));
+      cloneBtn.disabled = false;
+    }
+  });
+
+  loadVoices();
+</script>
+{% endblock %}

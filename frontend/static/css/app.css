@@ -88,3 +88,47 @@ h1 { margin: 0 0 0.25rem; font-size: 1.6rem; }
 
 .status { color: var(--muted); margin-top: 1.5rem; min-height: 1.2em; }
 .budget-note { color: var(--muted); font-size: 0.8rem; margin-top: 0.5rem; }
+
+.nav {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem 0;
+  display: flex;
+  gap: 1.5rem;
+}
+.nav a { color: var(--muted); text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { color: var(--text); }
+
+.rec-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.clone-form { display: flex; gap: 1rem; margin-top: 1.5rem; }
+.input {
+  flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  font-size: 1rem;
+}
+.warn-note { color: var(--warn); font-size: 0.85rem; margin: 0.5rem 0 0; min-height: 1.2em; }
+
+.section-title { font-size: 1rem; color: var(--muted); margin: 2.5rem 0 0.75rem; }
+.voice-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.voice-list li {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  font-size: 0.9rem;
+}
+.muted { color: var(--muted); }
+
+.select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.9rem;
+}

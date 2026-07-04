@@ -17,5 +17,9 @@ class Settings(BaseSettings):
     # Where the browser audio engine connects for the echo loop.
     public_ws_url: str = "ws://localhost:3001/ws/voice"
 
+    # Gateway HTTP base the browser calls for the voice registry (GET/POST /voices).
+    # PUBLIC_ prefix = safe to expose to the browser (gateway CORS allows it).
+    public_gateway_url: str = "http://localhost:3001"
+
 
 settings = Settings()
