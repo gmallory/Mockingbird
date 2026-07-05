@@ -1,8 +1,16 @@
 # Mockingbird — Product Specification
 
-> **Version:** 1.0.0  
-> **Last Updated:** 2026-05-30  
-> **Status:** Draft  
+> **Version:** 2.0.0  
+> **Last Updated:** 2026-07-04  
+> **Status:** Active  
+
+> **v2.0.0 changes:** synced to the implemented system (M1–M4 done, see
+> [ROADMAP.md](ROADMAP.md)): explicit inference backend modes with self-hosted GPU as the
+> confirmed first-priority engine and Cartesia/cloud-GPU as separate modes (owner decision
+> 2026-07-04); corrected Cartesia capabilities (clip-based, not streaming); data models and
+> APIs split into *implemented* vs *planned*; WebSocket contract deferred to
+> [agents/AGENTS.md](../agents/AGENTS.md); latency budget marked as a target with measured
+> Cartesia numbers recorded.
 
 ---
 
@@ -41,6 +49,32 @@ There is no web-based product that provides **real-time, high-fidelity voice clo
 ### 4.1 Real-Time Voice Cloning Engine
 
 The heart of Mockingbird — transforms live speech into a target voice with <300ms latency.
+
+#### Inference Backend Modes
+
+The inference engine is selected via `INFERENCE_BACKEND` (see `inference/app/config.py` and
+`.env.example`). All backends implement the same per-stream `BackendSession` interface (§8),
+so switching modes never changes the WS/gRPC contract. These are **separate, co-equal
+modes** — the cloud modes are not fallbacks for the GPU path.
+
+| Mode | What it is | Latency model | Status |
+|------|-----------|---------------|--------|
+| **`self_hosted`** (primary) | RVC/OpenVoice + ONNX Runtime on a local GPU. **First-priority engine** — the path this spec's per-frame latency budget applies to. | Per-frame streaming, ~172ms target (unmeasured until M5) | Planned (M5, next) |
+| **`cloud_gpu`** | The same self-hosted inference stack deployed on a rented GPU (A10G/L4), with its own config (endpoint, credentials, provisioning). | Per-frame streaming, ~172ms + extra network RTT | Planned (M5) |
+| **`cartesia`** | Cartesia's **clip-based** voice changer (`/voice-changer/sse`). Utterance-segmented: VAD detects end-of-speech, the whole utterance is converted as a clip. Walkie-talkie feel. | Utterance latency (see below); **measured felt floor ~2s** | Implemented (M4a–c) |
+| **`elevenlabs`** | ElevenLabs speech-to-speech (also clip-in / stream-out). | Utterance latency | Placeholder |
+| `passthrough` | Echo, for dev/tests. | 1:1 frames | Implemented (M1/M3) |
+
+Two latency metrics apply, one per latency model:
+
+- **Per-frame latency** (`self_hosted` / `cloud_gpu`): the ~172ms end-to-end budget below.
+  It is a **target, not a measured fact** — M5 includes a benchmark whose measured numbers
+  get recorded here ("measured-then-locked"). Self-hosted remains the primary engine even
+  if the first measurement misses the budget.
+- **Utterance latency** (`cartesia` / `elevenlabs`): end-of-speech → first output frame,
+  measured gateway-side (implemented in the Live Monitor as of M4c). Measured for Cartesia
+  (2026-07-03 spike): ~500ms VAD hangover + ~0.8–1s fixed overhead + ~0.45× realtime;
+  felt floor ~2.0s for a 2s utterance. Sub-second is not achievable in this mode.
 
 #### Architecture: Hybrid Server-Side Processing
 
@@ -89,7 +123,7 @@ The heart of Mockingbird — transforms live speech into a target voice with <30
 5. **Return** — Transformed audio streamed back as binary PCM via WebSocket
 6. **Playback** — `AudioWorkletProcessor` reads from `SharedArrayBuffer` ring buffer and outputs to destination
 
-#### Latency Budget
+#### Latency Budget (per-frame path: `self_hosted` / `cloud_gpu` — target until measured in M5)
 
 | Stage | Target | Notes |
 |-------|--------|-------|
@@ -251,10 +285,26 @@ Mockingbird supports multiple audio routing strategies for different use cases:
 
 ## 6. Data Models
 
-### Voice Model
+### Voice (implemented — M4b)
+
+The current registry row, backing the Cartesia clone flow. See
+`gateway/app/db/models.py::Voice` (SQLModel, Alembic-migrated).
 
 ```python
-# Pydantic/SQLModel — see gateway/app/db/models.py
+class Voice(SQLModel, table=True):
+    id: int                     # pk
+    voice_id: str               # Cartesia voice id (unique, indexed) — feeds voice[id]
+    label: str                  # human name shown in the UI
+    language: str
+    created_at: datetime
+```
+
+### VoiceModel (planned — self-hosted training, M5+; multi-user fields M6)
+
+The richer model below is the **future** shape for self-hosted training (HD clones, model
+artifacts, quality metrics). `user_id` and per-user isolation arrive with auth in M6.
+
+```python
 class VoiceModel(BaseModel):
     id: UUID                                            # UUID
     user_id: UUID                                       # Owner
@@ -347,40 +397,41 @@ class User(BaseModel):
 
 ### WebSocket — Audio Streaming
 
-```
-Client → Server (binary): Raw PCM Int16 audio frames (20ms chunks, 960 samples at 48kHz)
-Server → Client (binary): Transformed PCM Int16 audio frames
+**The canonical WS contract (binary frame format + JSON control messages) lives in
+[agents/AGENTS.md](../agents/AGENTS.md)** — it is the shared contract across frontend,
+gateway, and inference, and **it wins over any copy elsewhere, including this file**.
+Summary: binary raw PCM Int16 frames (20ms, 960 samples at 48kHz) both directions; JSON
+control messages `start` / `switch_model` / `stop` / `ping` client→server and `ready` /
+`model_loaded` / `error` (with `code`) / `degraded` / `pong` server→client.
 
-Client → Server (JSON control messages):
-  { "type": "start", "modelId": "uuid", "sampleRate": 48000 }
-  { "type": "switch_model", "modelId": "uuid" }
-  { "type": "stop" }
-  { "type": "ping" }
+### REST API — implemented (M2–M4)
 
-Server → Client (JSON control messages):
-  { "type": "ready", "latencyMs": 172 }
-  { "type": "model_loaded", "modelId": "uuid" }
-  { "type": "error", "message": "..." }
-  { "type": "metrics", "latencyMs": 165, "similarity": 0.92 }
-  { "type": "pong" }
-```
+Unauthenticated, single-user (auth arrives in M6). Gateway on `:8000`, inference on `:8001`.
 
-### REST API
+| Method | Endpoint | Service | Description |
+|--------|----------|---------|-------------|
+| GET | `/healthz` | gateway, inference | Health incl. Postgres/Redis (gateway) |
+| WS | `/ws/voice` | gateway | Binary audio streaming (contract above) |
+| GET | `/voices` | gateway | List cloned voices from the registry |
+| POST | `/voices` | gateway | Multipart `clip` + `label` + `language` → proxies to inference clone, persists row |
+| POST | `/voices` | inference | Multipart clone via Cartesia `/voices/clone`, returns `voice_id` (internal, called by gateway) |
+
+### REST API — planned
+
+`/api`-prefixed, JWT-authenticated (M6+); training/call endpoints track M5/M8.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/voices` | Create new voice model (upload audio) |
-| GET | `/api/voices` | List user's voice models |
 | GET | `/api/voices/:id` | Get voice model details |
 | DELETE | `/api/voices/:id` | Delete voice model |
 | PATCH | `/api/voices/:id` | Update model settings (pitch, speed) |
-| POST | `/api/voices/:id/train` | Trigger HD training |
+| POST | `/api/voices/:id/train` | Trigger HD training (self-hosted, M5+) |
 | GET | `/api/voices/:id/train/status` | Check training progress |
 | POST | `/api/voices/:id/preview` | Generate preview audio clip |
-| POST | `/api/calls/outbound` | Initiate outbound PSTN call |
-| GET | `/api/calls` | List call history |
-| GET | `/api/calls/:id` | Get call details + metrics |
-| GET | `/api/user/usage` | Get usage statistics |
+| POST | `/api/calls/outbound` | Initiate outbound PSTN call (M8) |
+| GET | `/api/calls` | List call history (M8) |
+| GET | `/api/calls/:id` | Get call details + metrics (M8) |
+| GET | `/api/user/usage` | Get usage statistics (M6+) |
 
 ---
 
@@ -419,29 +470,34 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
 registerProcessor('voice-capture', VoiceCaptureProcessor);
 ```
 
-### Server-Side (FastAPI)
+### Server-Side (implemented shape — M3/M4a)
+
+Conversion is **not** 1:1 per chunk. The gateway terminates the browser WS
+(`gateway/app/websocket/handler.py`) and proxies frames over a gRPC `Convert` stream to
+inference, which opens one **per-stream `BackendSession`**
+(`inference/app/backends/base.py`). A session may buffer many input frames and emit zero
+or many output frames per push — this is what lets clip-based backends (Cartesia) and
+per-frame backends (self-hosted) share one interface:
 
 ```python
-@app.websocket("/ws/voice")
-async def voice_stream(websocket: WebSocket):
-    await websocket.accept()
-    
-    # Load user's voice model
-    config = await websocket.receive_json()
-    model = model_manager.get_model(config["modelId"])
-    
-    while True:
-        # Receive 20ms audio chunk (binary)
-        raw_audio = await websocket.receive_bytes()
-        audio_np = np.frombuffer(raw_audio, dtype=np.int16).astype(np.float32) / 32768.0
-        
-        # Voice conversion inference (~80ms on GPU)
-        transformed = await model.convert(audio_np)
-        
-        # Send back transformed audio (binary)
-        output_bytes = (transformed * 32768).astype(np.int16).tobytes()
-        await websocket.send_bytes(output_bytes)
+# inference/app/backends/base.py (shape)
+class BackendSession:
+    async def push(self, frame: bytes) -> list[bytes]: ...   # 0..n output frames
+    async def flush(self) -> list[bytes]: ...                # drain on stream end
+    async def aclose(self) -> None: ...
+
+class Backend:
+    def open_session(self, model_id: str) -> BackendSession: ...
 ```
+
+- `passthrough`: `push()` returns `[frame]` (1:1 echo).
+- `cartesia`: energy/RMS VAD buffers frames; on end-of-speech, wraps the utterance as WAV,
+  POSTs to `/voice-changer/sse`, re-chunks the result into 1920-byte frames.
+- `self_hosted` / `cloud_gpu` (M5): per-frame GPU inference, `push()` streams output
+  continuously.
+
+The gateway degrades to echo if inference is unavailable, and serializes all WS sends
+while a concurrent reader task forwards inference output.
 
 ---
 
@@ -482,13 +538,16 @@ Input Audio → Content Encoder (HuBERT) → FAISS Retrieval → VITS Decoder �
 - MIT licensed
 - Good for languages beyond English
 
-### Cloud API Fallback: Cartesia Sonic-3
+### Cloud Mode: Cartesia (implemented — M4)
 
-For users who need the absolute lowest latency or when self-hosted GPU capacity is exhausted:
-- **40–90ms TTFB** — fastest commercial option
-- WebSocket streaming API
-- Voice cloning from 3–10 second samples
-- Usage-based pricing
+A separate no-GPU mode (not a fallback for the GPU path). **Verified against the live API:
+Cartesia's voice changer is clip-based** — `/voice-changer/bytes` and `/voice-changer/sse`
+take a whole clip; the realtime WebSocket is **TTS-only**, so there is no streaming-input
+voice conversion. Per-frame <172ms is not possible in this mode; it runs
+utterance-segmented (walkie-talkie), with measured felt latency ~2s+ (§4.1).
+- Voice cloning from short samples via `POST /voices/clone` (implemented in M4b)
+- Prosody-preserving audio→audio conversion (keeps the speaker's delivery and tics)
+- Usage-based pricing; runs anywhere, no GPU required
 
 ---
 
@@ -590,14 +649,19 @@ For users who need the absolute lowest latency or when self-hosted GPU capacity 
 
 ## 13. Milestones & Phased Rollout
 
+> **The canonical milestone tracker is [ROADMAP.md](ROADMAP.md)** (M-numbered milestones,
+> current state, next steps). This section is the high-level phase view only; when they
+> disagree, ROADMAP wins. Mapping: M4 + M5 complete Phase 1; M6 auth; M7
+> deployment/observability; M8 begins Phase 2.
+
 ### Phase 1 — MVP (Weeks 1–8)
-- [ ] Core audio pipeline (AudioWorklet → WebSocket → server inference → playback)
-- [ ] RVC model integration with ONNX optimization
-- [ ] Instant Clone via OpenVoice (10-30 second samples)
-- [ ] Preview Mode (mic → transform → speaker)
-- [ ] Basic web UI (FastAPI + Jinja2 + HTMX): Voice Studio + Live Monitor
-- [ ] User authentication (Supabase)
-- [ ] Single-server deployment (1 GPU node)
+- [x] Core audio pipeline (AudioWorklet → WebSocket → server inference → playback) — M1/M4a
+- [ ] RVC model integration with ONNX optimization — M5 (next)
+- [x] Instant clone (short samples) — via Cartesia `/voices/clone` (M4b); OpenVoice variant moves to M5
+- [x] Preview Mode (mic → transform → speaker) — Live Monitor loop (M4a/M4c)
+- [x] Basic web UI (FastAPI + Jinja2 + HTMX): Voice Studio + Live Monitor — M4c
+- [ ] User authentication (Supabase) — M6
+- [~] Single-server deployment — compose stack + dev.sh landed (#14); GPU node pending M5
 
 ### Phase 2 — Calling (Weeks 9–14)
 - [ ] Twilio WebRTC-to-PSTN integration

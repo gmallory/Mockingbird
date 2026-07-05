@@ -6,15 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mockingbird is **under active implementation** (no longer pre-implementation). The three Python services
 exist and have test suites: `frontend/`, `gateway/`, and `inference/` (plus `infrastructure/`, `proto/`).
-Milestones **M1–M3** are done and **M4a** has landed:
+Milestones **M1–M4** are done (M4a/b/c all landed):
 
 - **M1** — vertical echo slice (mic → WS → gateway echo → playback).
 - **M2** — data foundation: gateway Postgres + Redis, wired to `/healthz`.
 - **M3** — gRPC proxy + swappable inference backend (`passthrough` / `cartesia`).
-- **M4a** — VAD-segmented Cartesia voice conversion (utterance-based, clip API).
+- **M4** — VAD-segmented Cartesia conversion (M4a), voice cloning + `voices` registry (M4b),
+  Voice Studio UI + voice selection + dev compose stack (M4c).
 
-The canonical milestone tracker — current state and the concrete next steps (**M4b** voice cloning +
-registry, **M4c** Voice Studio UI, then M5–M8) — is **[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus
+The canonical milestone tracker — current state and the concrete next steps (**M5** self-hosted
+GPU backend, the first-priority engine; then M6 auth, M7 CI/observability, M8 calling) — is
+**[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus
 the relevant `agents/*.agent.md` before picking up work. `docs/PRODUCT_SPEC.md` remains the detailed spec
 (data models, API design, latency budgets). Still verify a directory/command/file exists before assuming
 it — parts of the planned layout (auth, self-hosted GPU, calling) are not built yet.
@@ -32,9 +34,10 @@ Mockingbird is a **portfolio / learning** project — optimize for clean archite
 not production hardening. Bias toward small, compartmentalized specs (one service or one vertical slice at a
 time) and surface key decisions for explicit sign-off before implementing.
 
-The vertical echo slice (M1) proved the latency loop and is done. **Current focus is M4** — the first
-usable real voice transform plus clone-your-voice: M4a (VAD-segmented Cartesia conversion) has landed;
-M4b (voice cloning + `voices` registry) is next, then M4c (Voice Studio UI). See
+M4 (Cartesia conversion + cloning + Voice Studio) is done. **Current focus is M5 — the self-hosted
+GPU backend (RVC/OpenVoice + ONNX Runtime), the first-priority engine** per the 2026-07-04 owner
+decision: self-hosted is primary even while its latency budget is unmeasured; Cartesia and the
+planned `cloud_gpu` mode are separate modes, not fallbacks. Auth slid to M6. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for the per-step breakdown.
 
 ## Architecture
@@ -62,8 +65,10 @@ Python FastAPI ML Inference Service (RVC / OpenVoice / GPT-SoVITS, ONNX Runtime 
 - **Total latency budget is ~172ms** end-to-end (capture → encode → upload → inference → postprocess →
   download → decode/playback); GPU inference itself is budgeted at 80ms. Changes to the streaming path should
   be evaluated against this budget, not just functional correctness.
-- **Inference backend is swappable** via `INFERENCE_BACKEND` (`self_hosted` | `cartesia` | `elevenlabs`),
-  so self-hosted GPU inference is not a hard dependency for frontend/gateway development.
+- **Inference backend is swappable** via `INFERENCE_BACKEND` (`self_hosted` | `cartesia` | `elevenlabs`;
+  `cloud_gpu` is added in M5 — same self-hosted stack on a rented GPU, own config). Self-hosted is the
+  **first-priority engine**; the cloud modes are separate co-equal modes, and frontend/gateway
+  development never hard-depends on a GPU being present.
 
 The WebSocket JSON control protocol and binary audio frame format (shared contract across frontend, gateway,
 and inference) are defined in [agents/AGENTS.md](agents/AGENTS.md) — keep all three services in sync with it
