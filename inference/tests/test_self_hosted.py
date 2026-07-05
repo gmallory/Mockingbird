@@ -114,6 +114,32 @@ async def test_total_output_matches_total_input(model_dir):
     assert all(len(f) == _FRAME_BYTES for f in out)
 
 
+async def test_model_switch_flushes_partial_block_under_old_voice(model_dir):
+    """Frames buffered before a switch_model must convert with the old voice."""
+    backend = _backend(model_dir)
+    session = backend.open_session()
+
+    out = []
+    for _ in range(3):
+        out += await session.push(_frame(8000), 48000, "halver")
+    assert out == []  # partial block still buffered
+    # Switch voices mid-block: the 3 buffered frames flush under "halver".
+    out += await session.push(_frame(8000), 48000, "identity")
+    out += await session.flush()
+
+    assert len(out) == 4
+    halved = np.frombuffer(b"".join(out[:3]), dtype=np.int16)
+    passed = np.frombuffer(out[3], dtype=np.int16)
+    assert 3500 <= np.abs(halved).max() <= 4500, "pre-switch frames must use the old voice"
+    assert 7500 <= np.abs(passed).max() <= 8500, "post-switch frame must use the new voice"
+
+
+async def test_block_frames_never_rounds_below_block_ms(model_dir):
+    """90ms/20ms must give 5 frames (100ms), not banker's-round to 4 (80ms)."""
+    backend = _backend(model_dir, block_ms=90)
+    assert backend.block_frames == 5
+
+
 async def test_audio_flows_through_the_onnx_model(model_dir):
     """The halver model must actually halve amplitude — proves ORT ran."""
     backend = _backend(model_dir)

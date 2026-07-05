@@ -107,11 +107,16 @@ class _SelfHostedSession(BackendSession):
         # The stream contract is fixed 48kHz/20ms frames; a mid-block
         # sample_rate change would mis-size frames already buffered.
         self._sample_rate = sample_rate
+        emitted: list[bytes] = []
+        if self._buf and model_id != self._model_id:
+            # Voice switched mid-block: convert the buffered frames under the
+            # old voice so they don't come out sounding like the new one.
+            emitted = await self._convert_block(self._model_id)
         self._model_id = model_id
         self._buf.append(pcm)
         if len(self._buf) < self._block_frames:
-            return []
-        return await self._convert_block(model_id)
+            return emitted
+        return emitted + await self._convert_block(model_id)
 
     async def flush(self) -> list[bytes]:
         if self._buf:
@@ -171,7 +176,9 @@ class SelfHostedBackend(InferenceBackend):
         self._model_sample_rate = model_sample_rate
         self._device = device
         self.frame_ms = frame_ms
-        self.block_frames = max(1, round(block_ms / frame_ms))
+        # Ceil-divide so the effective block is never shorter than block_ms
+        # (round() would turn 90ms/20ms into 4 frames = 80ms).
+        self.block_frames = max(1, -(-block_ms // frame_ms))
         self._context_ms = context_ms
         self._max_loaded = max(1, max_loaded_models)
         self._s3_endpoint = s3_endpoint
@@ -182,8 +189,12 @@ class SelfHostedBackend(InferenceBackend):
         # Negative cache: models that failed to resolve/load recently. Without
         # it every 100ms block would retry a full S3 download (inside the lock),
         # turning per-block latency into the S3 error RTT.
+        # Both id-keyed caches are fed by client-supplied model ids, so they
+        # are capped: a client probing unique bogus ids must not grow memory
+        # without bound in a long-lived process.
         self._failed_at: dict[str, float] = {}
         self._failed_retry_s = 30.0
+        self._id_cache_cap = 1024
         import onnxruntime as ort
 
         self.providers = pick_providers(device, ort.get_available_providers())
@@ -252,13 +263,13 @@ class SelfHostedBackend(InferenceBackend):
                 return self._sessions[model_id]
             path = await self._resolve_model_path(model_id)
             if path is None:
-                self._failed_at[model_id] = time.monotonic()
+                self._mark_failed(model_id)
                 return None
             try:
                 session = await asyncio.to_thread(self._create_ort_session, str(path))
             except Exception as exc:  # noqa: BLE001 - bad weights degrade, never crash
                 log.warning("self_hosted.model_load_failed", model=model_id, error=str(exc))
-                self._failed_at[model_id] = time.monotonic()
+                self._mark_failed(model_id)
                 return None
             self._sessions[model_id] = session
             if len(self._sessions) > self._max_loaded:
@@ -266,6 +277,15 @@ class SelfHostedBackend(InferenceBackend):
                 log.info("self_hosted.model_evicted", model=evicted)
             log.info("self_hosted.model_loaded", model=model_id, path=str(path))
             return session
+
+    def _mark_failed(self, model_id: str) -> None:
+        now = time.monotonic()
+        if len(self._failed_at) >= self._id_cache_cap:
+            cutoff = now - self._failed_retry_s
+            self._failed_at = {k: v for k, v in self._failed_at.items() if v > cutoff}
+            while len(self._failed_at) >= self._id_cache_cap:
+                self._failed_at.pop(next(iter(self._failed_at)))  # oldest insertions first
+        self._failed_at[model_id] = now
 
     def _resolve_failed_recently(self, model_id: str) -> bool:
         failed = self._failed_at.get(model_id)
@@ -303,6 +323,9 @@ class SelfHostedBackend(InferenceBackend):
         client.download_file(self._s3_bucket, f"models/{model_id}.onnx", str(dest))
 
     def _warn_once(self, model_id: str, note: str) -> None:
-        if model_id not in self._warned_missing:
-            self._warned_missing.add(model_id)
-            log.warning("self_hosted.no_model", model=model_id, note=note)
+        if model_id in self._warned_missing:
+            return
+        if len(self._warned_missing) >= self._id_cache_cap:
+            self._warned_missing.clear()  # occasional re-warn beats unbounded growth
+        self._warned_missing.add(model_id)
+        log.warning("self_hosted.no_model", model=model_id, note=note)

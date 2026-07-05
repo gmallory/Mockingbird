@@ -101,8 +101,18 @@ async def run(args: argparse.Namespace) -> None:
     if tmp:
         tmp.cleanup()
 
+    if not block_ms:
+        raise SystemExit(
+            f"no measured blocks completed after warmup; increase --seconds "
+            f"(got {args.seconds}s, need > {2 * block_frames * FRAME_MS / 1000:.1f}s)"
+        )
     p50 = statistics.median(block_ms)
-    p95 = statistics.quantiles(block_ms, n=20)[18]
+    # inclusive method tolerates small samples; a single block is its own p95
+    p95 = (
+        statistics.quantiles(block_ms, n=20, method="inclusive")[18]
+        if len(block_ms) > 1
+        else block_ms[0]
+    )
     audio_s = (n_frames - block_frames) * FRAME_MS / 1000
     busy_s = sum(block_ms) / 1000
     print(
