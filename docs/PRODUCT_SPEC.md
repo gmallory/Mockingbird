@@ -59,8 +59,8 @@ modes** — the cloud modes are not fallbacks for the GPU path.
 
 | Mode | What it is | Latency model | Status |
 |------|-----------|---------------|--------|
-| **`self_hosted`** (primary) | RVC/OpenVoice + ONNX Runtime on a local GPU. **First-priority engine** — the path this spec's per-frame latency budget applies to. | Per-frame streaming, ~172ms target (unmeasured until M5) | Planned (M5, next) |
-| **`cloud_gpu`** | The same self-hosted inference stack deployed on a rented GPU (A10G/L4), with its own config (endpoint, credentials, provisioning). | Per-frame streaming, ~172ms + extra network RTT | Planned (M5) |
+| **`self_hosted`** (primary) | RVC/OpenVoice + ONNX Runtime. **First-priority engine** — the path this spec's per-frame latency budget applies to. Streaming block engine + ONNX model contract landed in M5a; real RVC/OpenVoice weight export is M5b. | Per-frame streaming; pipeline overhead measured (see below), model inference target until M5b | Engine implemented (M5a) |
+| **`cloud_gpu`** | The same self-hosted inference stack deployed on a rented GPU (A10G/L4): run inference there with `INFERENCE_BACKEND=cloud_gpu`, point the gateway's `INFERENCE_GRPC_URL` at that box. | Per-frame streaming, + extra network RTT | Mode implemented (M5a) |
 | **`cartesia`** | Cartesia's **clip-based** voice changer (`/voice-changer/sse`). Utterance-segmented: VAD detects end-of-speech, the whole utterance is converted as a clip. Walkie-talkie feel. | Utterance latency (see below); **measured felt floor ~2s** | Implemented (M4a–c) |
 | **`elevenlabs`** | ElevenLabs speech-to-speech (also clip-in / stream-out). | Utterance latency | Placeholder |
 | `passthrough` | Echo, for dev/tests. | 1:1 frames | Implemented (M1/M3) |
@@ -68,9 +68,17 @@ modes** — the cloud modes are not fallbacks for the GPU path.
 Two latency metrics apply, one per latency model:
 
 - **Per-frame latency** (`self_hosted` / `cloud_gpu`): the ~172ms end-to-end budget below.
-  It is a **target, not a measured fact** — M5 includes a benchmark whose measured numbers
-  get recorded here ("measured-then-locked"). Self-hosted remains the primary engine even
-  if the first measurement misses the budget.
+  **Partially measured as of M5a** (2026-07-04, dev Mac M-series, identity ONNX graph =
+  streaming-pipeline overhead floor, `scripts/self_hosted_bench.py`):
+  - Pipeline overhead per 100ms block: **p95 0.57ms** (CPU), **4.27ms** (CoreML),
+    **2.12ms** (CPU with 48kHz↔16kHz resample). Real-time factor ≤0.014x.
+  - Effective server-side added latency = block buffer + conversion: **~101–104ms**
+    with the default 100ms block. The block size, not compute, is the floor;
+    `SELF_HOSTED_BLOCK_MS` can drop to 40–60ms with this much compute headroom.
+  - **Model inference itself is still unmeasured** — the 80ms GPU line below stays a
+    target until real RVC/OpenVoice weights run in M5b ("measured-then-locked").
+  Self-hosted remains the primary engine even if the first full measurement misses
+  the budget.
 - **Utterance latency** (`cartesia` / `elevenlabs`): end-of-speech → first output frame,
   measured gateway-side (implemented in the Live Monitor as of M4c). Measured for Cartesia
   (2026-07-03 spike): ~500ms VAD hangover + ~0.8–1s fixed overhead + ~0.45× realtime;
@@ -493,8 +501,12 @@ class Backend:
 - `passthrough`: `push()` returns `[frame]` (1:1 echo).
 - `cartesia`: energy/RMS VAD buffers frames; on end-of-speech, wraps the utterance as WAV,
   POSTs to `/voice-changer/sse`, re-chunks the result into 1920-byte frames.
-- `self_hosted` / `cloud_gpu` (M5): per-frame GPU inference, `push()` streams output
-  continuously.
+- `self_hosted` / `cloud_gpu` (M5a): block-streaming ONNX inference — frames buffer into
+  100ms blocks, each converted with 200ms of left context; `push()` emits output frames
+  every block, so latency is block size + inference, independent of utterance length.
+  Models are `{model_id}.onnx` files (float32 `[1, N]` audio in/out at
+  `SELF_HOSTED_MODEL_SAMPLE_RATE`), resolved from `SELF_HOSTED_MODEL_DIR` or
+  `s3://$S3_BUCKET/models/`, LRU-cached per process.
 
 The gateway degrades to echo if inference is unavailable, and serializes all WS sends
 while a concurrent reader task forwards inference output.
