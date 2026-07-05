@@ -163,7 +163,7 @@ def clone_voice_local(clip: bytes, label: str, model_dir: str) -> str:
     if not converter.exists() or not se_encoder.exists():
         raise CloneError(
             f"OpenVoice template models not found in {template_dir}; "
-            "run `uv run --group export python scripts/export_openvoice_onnx.py` first"
+            "run `uv sync --group export && uv run python scripts/export_openvoice_onnx.py` first"
         )
     audio = decode_clip(clip)
     se = extract_se(audio, se_encoder)

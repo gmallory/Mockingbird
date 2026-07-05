@@ -313,9 +313,11 @@ class SelfHostedBackend(InferenceBackend):
         # compression on every block. The window size is constant, so the next
         # block re-renders exactly the truncated span — emitting the last
         # block-worth instead keeps seams contiguous and the stream 1:1.
-        # Note: when this rule fires, head below becomes 0, so the seam
-        # crossfade is inactive for truncating models by construction — the
-        # deficit rule itself is what keeps their seams aligned.
+        # Note: head below stays non-zero once there's left context, so the
+        # seam crossfade keeps running for truncating models. It stays aligned
+        # because the rule shifts every block's emitted window by the same
+        # constant hop, so a block's held tail and the next block's re-rendered
+        # head still span the same real time (count stays exactly 1:1).
         deficit = block.size - block_share
         if 0 < deficit <= int(sample_rate * 0.025):
             block_share = min(block.size, audio.size)

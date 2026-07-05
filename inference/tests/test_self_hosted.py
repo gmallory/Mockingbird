@@ -264,6 +264,23 @@ async def test_crossfade_degraded_block_loses_no_audio(model_dir):
     assert total == 10 * _FRAME_SAMPLES
 
 
+async def test_crossfade_with_truncating_model_stays_1to1(model_dir):
+    """Deficit rule and seam crossfade together must still yield a 1:1 stream.
+
+    The crossfade head is non-zero on a truncating model once context exists,
+    so the crossfade runs — but the held tail and the next block's re-rendered
+    head cover the same real-time span, so no samples are gained or lost.
+    """
+    _write_truncating_model(model_dir / "trunc.onnx", drop=500)  # ~10ms @48kHz
+    backend = _backend(model_dir, crossfade_ms=5)
+    session = backend.open_session()
+    out = []
+    for _ in range(20):  # 4 blocks
+        out += await session.push(_frame(8000), 48000, "trunc")
+    out += await session.flush()
+    assert sum(len(f) for f in out) // 2 == 20 * _FRAME_SAMPLES
+
+
 # ----- error posture: degrade, never crash -----------------------------------
 
 
