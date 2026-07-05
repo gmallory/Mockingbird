@@ -231,6 +231,13 @@ def test_factory_cartesia_without_key_raises():
         get_backend(Settings(inference_backend="cartesia", cartesia_api_key=""))
 
 
-def test_factory_self_hosted_not_implemented():
+def test_factory_self_hosted_and_cloud_gpu_share_the_stack():
+    from app.backends.self_hosted import SelfHostedBackend
+
+    for mode in ("self_hosted", "cloud_gpu"):
+        assert isinstance(get_backend(Settings(inference_backend=mode)), SelfHostedBackend)
+
+
+def test_factory_elevenlabs_is_placeholder():
     with pytest.raises(NotImplementedError):
-        get_backend(Settings(inference_backend="self_hosted"))
+        get_backend(Settings(inference_backend="elevenlabs"))

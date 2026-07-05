@@ -19,7 +19,33 @@ class Settings(BaseSettings):
     grpc_port: int = 50051
 
     # Which transform to run. "passthrough" is the M3 default (no model cost).
-    inference_backend: Literal["passthrough", "cartesia", "self_hosted"] = "passthrough"
+    # "self_hosted" is the first-priority engine (M5); "cloud_gpu" is the same
+    # stack deployed on a rented GPU box (the gateway dials that box instead);
+    # "elevenlabs" is a placeholder mode from the spec, not yet implemented.
+    inference_backend: Literal[
+        "passthrough", "cartesia", "self_hosted", "cloud_gpu", "elevenlabs"
+    ] = "passthrough"
+
+    # Self-hosted / cloud_gpu backend (ONNX Runtime). DEVICE picks the execution
+    # provider: auto = CUDA > CoreML > CPU, whichever is available.
+    device: Literal["auto", "cuda", "coreml", "cpu"] = "auto"
+    self_hosted_model_dir: str = "models"
+    # Model used when a frame carries no model_id (same role as cartesia_voice_id).
+    self_hosted_default_model: str = ""
+    # Sample rate the ONNX model expects; audio is resampled in/out when it
+    # differs from the stream's 48kHz.
+    self_hosted_model_sample_rate: int = 48000
+    # Streaming block size: latency floor of the self-hosted path. Each block is
+    # converted with `context_ms` of already-heard audio prepended for continuity.
+    self_hosted_block_ms: int = 100
+    self_hosted_context_ms: int = 200
+    self_hosted_max_loaded_models: int = 4
+
+    # S3/MinIO model storage: models missing from self_hosted_model_dir are
+    # fetched from s3://{s3_bucket}/models/{model_id}.onnx. Credentials come from
+    # the standard AWS env vars (see .env.example).
+    s3_endpoint: str = ""
+    s3_bucket: str = ""
 
     # Cartesia cloud backend (only read when inference_backend == "cartesia").
     cartesia_api_key: str = ""

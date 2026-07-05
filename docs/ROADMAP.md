@@ -20,7 +20,9 @@ Before starting a milestone, read this file plus the relevant `agents/*.agent.md
 | → M4a | VAD-segmented Cartesia conversion | done (#10) |
 | → M4b | Voice cloning + `voices` registry | done (#11, #13) |
 | → M4c | Voice Studio UI + voice selection | done (#14) |
-| **M5** | **Self-hosted GPU backend (RVC/OpenVoice) — primary engine** | **next** |
+| **M5** | **Self-hosted GPU backend (RVC/OpenVoice) — primary engine** | **in progress** |
+| → M5a | Streaming ONNX engine + `cloud_gpu` mode + latency benchmark | done |
+| → **M5b** | **Real voice weights (RVC/OpenVoice ONNX export) + GPU measurement** | **next** |
 | M6 | Auth (Supabase/JWT) + multi-user voice library | pending |
 | M7 | Infra / CI hardening (CI, Grafana; Dockerfiles/compose landed in #14) | pending |
 | M8 | Calling — Twilio WebRTC↔PSTN (PRODUCT_SPEC Phase 2) | pending |
@@ -167,34 +169,68 @@ output frame, measured gateway-side).
 
 ## Forward roadmap (after M4)
 
-### M5 — Self-hosted GPU backend — NEXT
+### M5 — Self-hosted GPU backend — IN PROGRESS (M5a done)
 
 **Goal:** make the first-priority engine real — `self_hosted` voice conversion
-(RVC/OpenVoice + ONNX Runtime GPU) behind the **same** per-stream `BackendSession`
-interface from M4a. Backend swap only; no WS/gRPC contract change.
+(RVC/OpenVoice + ONNX Runtime) behind the **same** per-stream `BackendSession`
+interface from M4a. Backend swap only; no WS/gRPC contract change. Split like M4:
+**M5a** = streaming engine + modes + benchmark (landed); **M5b** = real voice weights.
 
-**What needs to change to make self-hosted the primary path:**
+### M5a — Streaming ONNX engine + `cloud_gpu` mode + benchmark — DONE
 
-- **Inference:** implement `inference/app/backends/self_hosted.py` as a `BackendSession`
-  (per-frame `push()` streaming, unlike the Cartesia utterance session). Model loading from
-  reference-audio / model-weight storage (MinIO/S3 — `S3_ENDPOINT`/`S3_BUCKET` already in
-  `.env.example`).
-- **Backend enum:** add `cloud_gpu` as a **distinct `INFERENCE_BACKEND` value** in
-  `inference/app/config.py` and `.env.example` — same self-hosted inference stack deployed
-  on a rented GPU (A10G/L4), with its own config keys (endpoint, credentials, provisioning
-  notes). Four modes total: `self_hosted` (primary) | `cloud_gpu` | `cartesia` | `elevenlabs`.
-- **GPU provisioning:** document/script the two deployment shapes — local dev GPU
-  (`self_hosted`) and rented GPU (`cloud_gpu`).
-- **Latency benchmark ("measured-then-locked"):** measure the real per-frame end-to-end
-  latency of the self-hosted path and record the numbers in PRODUCT_SPEC §4.1 next to the
-  ~172ms budget (which stays a *target* until then). **Self-hosted remains primary even if
-  the first measurement misses 172ms.** Cartesia's utterance latency is already measured
-  and locked (see M4c: ~2s felt floor).
-- **Cartesia untouched:** the `cartesia` clip/utterance mode stays as-is, a separate
+- `inference/app/backends/self_hosted.py`: `SelfHostedBackend` + block-streaming
+  session. Frames buffer into `SELF_HOSTED_BLOCK_MS` blocks (default 100ms); each
+  block runs through the ONNX model with `SELF_HOSTED_CONTEXT_MS` (default 200ms)
+  of left context for continuity; output re-chunked to 20ms frames and emitted
+  immediately — latency is block + inference, independent of utterance length.
+  Inference runs in a worker thread (`asyncio.to_thread`) so concurrent gRPC
+  streams aren't starved.
+- **ONNX model contract** (what M5b's export must satisfy): one `{model_id}.onnx`
+  per voice; first input float32 mono `[1, N]` at `SELF_HOSTED_MODEL_SAMPLE_RATE`
+  (audio resampled in/out when it differs from the 48kHz stream); first output
+  same layout, length may differ (mapped back proportionally).
+- **Model resolution + cache:** `SELF_HOSTED_MODEL_DIR/{model_id}.onnx`, else
+  downloaded from `s3://$S3_BUCKET/models/{model_id}.onnx` (boto3, MinIO-compatible
+  via `S3_ENDPOINT`). LRU cache of loaded sessions (`SELF_HOSTED_MAX_LOADED_MODELS`).
+  Model ids are sanitized (no path traversal).
+- **Error posture mirrors Cartesia:** missing/corrupt model, bad model id, S3 miss,
+  or a failed inference passes audio through unchanged with a logged warning —
+  never kills the gRPC stream.
+- **Device selection:** `DEVICE=auto|cuda|coreml|cpu` → ONNX Runtime execution
+  providers (auto prefers CUDA > CoreML > CPU); unavailable devices degrade to CPU.
+  `/healthz` reports the device for self-hosted modes.
+- **Backend enum:** `INFERENCE_BACKEND` now `passthrough | cartesia | self_hosted |
+  cloud_gpu | elevenlabs` (elevenlabs = placeholder raising NotImplementedError).
+  `cloud_gpu` constructs the identical backend — it exists so deploys are explicit:
+  run inference on the rented GPU box (A10G/L4) with `INFERENCE_BACKEND=cloud_gpu`
+  and point the gateway's `INFERENCE_GRPC_URL` at that box (notes in `.env.example`).
+- **Benchmark:** `inference/scripts/self_hosted_bench.py` — synthetic speech-like
+  frames through the real session, reports per-block p50/p95/max, real-time factor,
+  and effective added latency; `--model` accepts real weights. Measured numbers
+  recorded in PRODUCT_SPEC §4.1 (pipeline overhead p95 0.6–4.3ms/block; the 100ms
+  block buffer is the floor, not compute).
+- **Tests** (`inference/tests/test_self_hosted.py`): tiny ONNX gain graphs built
+  on the fly prove audio flows through ORT; blocking cadence, flush drain,
+  resample path, default model, degrade paths, LRU cache, mocked S3 fetch.
+  No GPU or network needed.
+- **Cartesia untouched:** the clip/utterance mode stays as-is, a separate
   selectable mode — not a fallback of the GPU path.
 
-**Before starting:** expand this section to M4b-level detail (file paths, done-when, test
-plan) — the M4b section above is the proven template.
+**Done when (met):** `INFERENCE_BACKEND=self_hosted` boots, streams per-block
+converted audio through an ONNX model end-to-end, degrades to passthrough when no
+model is available, and the benchmark's measured numbers are in PRODUCT_SPEC §4.1.
+
+### M5b — Real voice weights (RVC/OpenVoice export) — NEXT
+
+- Export/produce a real voice-conversion model satisfying the M5a ONNX contract
+  (RVC ONNX export path first; OpenVoice v2 zero-shot as the alternative), wire it
+  to the `voices` registry, and re-run the benchmark with real weights on a GPU
+  (local `self_hosted` and rented `cloud_gpu`) — that measurement locks the 80ms
+  inference line in PRODUCT_SPEC §4.1. **Self-hosted remains primary even if the
+  first measurement misses 172ms.**
+- Tune `SELF_HOSTED_BLOCK_MS` (measured compute headroom allows 40–60ms) and add
+  crossfade at block seams if audible with real weights.
+- GPU provisioning script/docs for the rented-GPU (`cloud_gpu`) shape.
 
 ### M6 — Auth + multi-user voice library
 

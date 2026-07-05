@@ -8,7 +8,7 @@ up the whole inference service.
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.backends import get_backend
@@ -42,11 +42,18 @@ app.include_router(voices_router)
 
 
 @app.get("/healthz")
-async def healthz() -> JSONResponse:
-    return JSONResponse(
-        {
-            "status": "ok",
-            "backend": settings.inference_backend,
-            "grpcPort": settings.grpc_port,
-        }
-    )
+async def healthz(request: Request) -> JSONResponse:
+    payload = {
+        "status": "ok",
+        "backend": settings.inference_backend,
+        "grpcPort": settings.grpc_port,
+    }
+    if settings.inference_backend in ("self_hosted", "cloud_gpu"):
+        payload["device"] = settings.device
+        # Resolved ONNX Runtime providers — "device": "auto" alone can't tell
+        # you whether CUDA actually loaded.
+        backend = getattr(request.app.state, "backend", None)
+        providers = getattr(backend, "providers", None)
+        if providers:
+            payload["providers"] = providers
+    return JSONResponse(payload)

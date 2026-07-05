@@ -33,7 +33,26 @@ def get_backend(settings: Settings) -> InferenceBackend:
             preroll_ms=settings.vad_preroll_ms,
         )
 
-    if name == "self_hosted":
-        raise NotImplementedError("the self_hosted GPU backend lands in a later milestone")
+    if name in ("self_hosted", "cloud_gpu"):
+        # cloud_gpu is the same stack as self_hosted, deployed on a rented GPU
+        # box — the mode value exists so deploys are explicit about which shape
+        # they are; the in-process backend is identical.
+        from app.backends.self_hosted import SelfHostedBackend
+
+        return SelfHostedBackend(
+            model_dir=settings.self_hosted_model_dir,
+            default_model=settings.self_hosted_default_model,
+            model_sample_rate=settings.self_hosted_model_sample_rate,
+            device=settings.device,
+            frame_ms=settings.frame_ms,
+            block_ms=settings.self_hosted_block_ms,
+            context_ms=settings.self_hosted_context_ms,
+            max_loaded_models=settings.self_hosted_max_loaded_models,
+            s3_endpoint=settings.s3_endpoint,
+            s3_bucket=settings.s3_bucket,
+        )
+
+    if name == "elevenlabs":
+        raise NotImplementedError("the elevenlabs backend is a placeholder mode (not yet built)")
 
     raise ValueError(f"unknown INFERENCE_BACKEND: {name!r}")

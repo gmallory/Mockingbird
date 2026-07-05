@@ -6,13 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mockingbird is **under active implementation** (no longer pre-implementation). The three Python services
 exist and have test suites: `frontend/`, `gateway/`, and `inference/` (plus `infrastructure/`, `proto/`).
-Milestones **M1–M4** are done (M4a/b/c all landed):
+Milestones **M1–M4** are done (M4a/b/c all landed), plus **M5a**:
 
 - **M1** — vertical echo slice (mic → WS → gateway echo → playback).
 - **M2** — data foundation: gateway Postgres + Redis, wired to `/healthz`.
 - **M3** — gRPC proxy + swappable inference backend (`passthrough` / `cartesia`).
 - **M4** — VAD-segmented Cartesia conversion (M4a), voice cloning + `voices` registry (M4b),
   Voice Studio UI + voice selection + dev compose stack (M4c).
+- **M5a** — self-hosted block-streaming ONNX Runtime backend (`self_hosted` + `cloud_gpu` modes,
+  ONNX model contract, local/S3 model loading, latency benchmark). Real RVC/OpenVoice weights: M5b.
 
 The canonical milestone tracker — current state and the concrete next steps (**M5** self-hosted
 GPU backend, the first-priority engine; then M6 auth, M7 CI/observability, M8 calling) — is
@@ -34,10 +36,10 @@ Mockingbird is a **portfolio / learning** project — optimize for clean archite
 not production hardening. Bias toward small, compartmentalized specs (one service or one vertical slice at a
 time) and surface key decisions for explicit sign-off before implementing.
 
-M4 (Cartesia conversion + cloning + Voice Studio) is done. **Current focus is M5 — the self-hosted
-GPU backend (RVC/OpenVoice + ONNX Runtime), the first-priority engine** per the 2026-07-04 owner
-decision: self-hosted is primary even while its latency budget is unmeasured; Cartesia and the
-planned `cloud_gpu` mode are separate modes, not fallbacks. Auth slid to M6. See
+M4 and M5a (streaming ONNX engine, `cloud_gpu` mode, benchmark) are done. **Current focus is
+M5b — real RVC/OpenVoice weights for the self-hosted engine, the first-priority engine** per the
+2026-07-04 owner decision: self-hosted is primary even while its full latency budget is
+unmeasured; Cartesia and `cloud_gpu` are separate modes, not fallbacks. Auth slid to M6. See
 [docs/ROADMAP.md](docs/ROADMAP.md) for the per-step breakdown.
 
 ## Architecture
