@@ -1,15 +1,21 @@
-"""Voice cloning route (Cartesia).
+"""Voice cloning route.
 
-The inference service owns the Cartesia API key, so cloning a user's voice lives
-here rather than in the gateway. ``POST /voices`` takes a recorded audio clip and
-forwards it to Cartesia ``POST /voices/clone``; the returned ``id`` is a Cartesia
-``voice_id`` usable directly as the voice-changer ``voice[id]`` on the streaming
-path. The gateway persists that id (it owns the database); this route only mints it.
+``POST /voices`` takes a recorded audio clip and mints a ``voice_id`` usable on
+the streaming path; the gateway persists it (it owns the database). The backend
+mode decides how (M5b):
 
-This is an offline REST call, not the 20ms audio hot path, so a per-request httpx
-client is fine — cloning is infrequent. The Cartesia client is the same factory
-``app/backends/cartesia.py`` uses for the long-lived voice-changer client.
+- ``cartesia`` — forward the clip to Cartesia ``POST /voices/clone``; the
+  returned ``id`` is used directly as the voice-changer ``voice[id]``. The
+  inference service owns the Cartesia API key, which is why this lives here.
+- ``self_hosted`` / ``cloud_gpu`` — instant-clone locally: extract a speaker
+  embedding from the clip and bake it into the exported OpenVoice converter
+  template, producing ``{model_id}.onnx`` in the model dir. The returned
+  ``voice_id`` **is** the model id the streaming backend loads.
+
+Either way this is an offline call, not the 20ms audio hot path.
 """
+
+import asyncio
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -54,6 +60,20 @@ async def _read_clip(clip: UploadFile) -> bytes:
     return b"".join(chunks)
 
 
+async def _clone_self_hosted(clip_bytes: bytes, name: str, language: str) -> dict:
+    """Instant-clone against the exported OpenVoice template (no network)."""
+    from app.export.clone import CloneError, clone_voice_local
+
+    try:
+        # CPU-bound (ORT session + 130MB protobuf write); keep the loop free.
+        model_id = await asyncio.to_thread(
+            clone_voice_local, clip_bytes, name, settings.self_hosted_model_dir
+        )
+    except CloneError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"voice_id": model_id, "name": name, "language": language}
+
+
 @router.post("/voices")
 async def clone_voice(
     clip: UploadFile = File(...),
@@ -61,12 +81,21 @@ async def clone_voice(
     language: str = Form(...),
     transport: httpx.AsyncBaseTransport | None = Depends(_get_transport),
 ) -> dict:
-    """Clone a voice from an uploaded clip; return the Cartesia voice id."""
-    _require_cartesia()
+    """Clone a voice from an uploaded clip; return the minted voice id."""
+    if settings.inference_backend not in ("cartesia", "self_hosted", "cloud_gpu"):
+        raise HTTPException(
+            status_code=400,
+            detail="voice cloning requires INFERENCE_BACKEND=cartesia|self_hosted|cloud_gpu",
+        )
 
     clip_bytes = await _read_clip(clip)
     if not clip_bytes:
         raise HTTPException(status_code=400, detail="clip is empty")
+
+    if settings.inference_backend in ("self_hosted", "cloud_gpu"):
+        return await _clone_self_hosted(clip_bytes, name, language)
+
+    _require_cartesia()
     files = {
         "clip": (
             clip.filename or "clip",

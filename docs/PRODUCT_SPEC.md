@@ -59,7 +59,7 @@ modes** — the cloud modes are not fallbacks for the GPU path.
 
 | Mode | What it is | Latency model | Status |
 |------|-----------|---------------|--------|
-| **`self_hosted`** (primary) | RVC/OpenVoice + ONNX Runtime. **First-priority engine** — the path this spec's per-frame latency budget applies to. Streaming block engine + ONNX model contract landed in M5a; real RVC/OpenVoice weight export is M5b. | Per-frame streaming; pipeline overhead measured (see below), model inference target until M5b | Engine implemented (M5a) |
+| **`self_hosted`** (primary) | OpenVoice V2 (+ RVC later) on ONNX Runtime. **First-priority engine** — the path this spec's per-frame latency budget applies to. Streaming block engine + ONNX model contract landed in M5a; real OpenVoice weights, ONNX export, and instant clone landed in M5b (RVC single-graph export deferred — needs HuBERT+F0 composition). | Per-frame streaming; **measured on real weights** (see below); GPU (`cloud_gpu`) run still pending | Real weights running (M5b) |
 | **`cloud_gpu`** | The same self-hosted inference stack deployed on a rented GPU (A10G/L4): run inference there with `INFERENCE_BACKEND=cloud_gpu`, point the gateway's `INFERENCE_GRPC_URL` at that box. | Per-frame streaming, + extra network RTT | Mode implemented (M5a) |
 | **`cartesia`** | Cartesia's **clip-based** voice changer (`/voice-changer/sse`). Utterance-segmented: VAD detects end-of-speech, the whole utterance is converted as a clip. Walkie-talkie feel. | Utterance latency (see below); **measured felt floor ~2s** | Implemented (M4a–c) |
 | **`elevenlabs`** | ElevenLabs speech-to-speech (also clip-in / stream-out). | Utterance latency | Placeholder |
@@ -68,17 +68,25 @@ modes** — the cloud modes are not fallbacks for the GPU path.
 Two latency metrics apply, one per latency model:
 
 - **Per-frame latency** (`self_hosted` / `cloud_gpu`): the ~172ms end-to-end budget below.
-  **Partially measured as of M5a** (2026-07-04, dev Mac M-series, identity ONNX graph =
-  streaming-pipeline overhead floor, `scripts/self_hosted_bench.py`):
-  - Pipeline overhead per 100ms block: **p95 0.57ms** (CPU), **4.27ms** (CoreML),
-    **2.12ms** (CPU with 48kHz↔16kHz resample). Real-time factor ≤0.014x.
-  - Effective server-side added latency = block buffer + conversion: **~101–104ms**
-    with the default 100ms block. The block size, not compute, is the floor;
-    `SELF_HOSTED_BLOCK_MS` can drop to 40–60ms with this much compute headroom.
-  - **Model inference itself is still unmeasured** — the 80ms GPU line below stays a
-    target until real RVC/OpenVoice weights run in M5b ("measured-then-locked").
-  Self-hosted remains the primary engine even if the first full measurement misses
-  the budget.
+  **Measured on real weights as of M5b** (2026-07-05, dev Mac M-series CPU, exported
+  OpenVoice V2 converter @22050Hz, `scripts/self_hosted_bench.py`):
+  - Tuned defaults `SELF_HOSTED_BLOCK_MS=60` / `SELF_HOSTED_CONTEXT_MS=140`:
+    per-block conversion **p50 46.2ms / p95 47.5ms / max 54.4ms**, real-time factor
+    **0.77x**, effective server-side added latency (block buffer + p95 conversion)
+    **~107ms** (+ up to 5ms crossfade holdback; on the OpenVoice export the
+    hop-truncation deficit rule keeps seams contiguous instead, so the blend —
+    and its latency — is inactive).
+  - The context+block window drives compute: 100/200 gives p95 ~90ms (~190ms added,
+    RTF 0.71); 60ms blocks with the old 200ms context push RTF past 1.0 on CPU.
+    CoreML EP is no faster than CPU here (graph partially falls back).
+  - Real speech through the full streaming session (clone → convert): RTF 0.83,
+    output stream exactly 1:1 with input frames.
+  - **Laptop-CPU p95 (47.5ms) already sits under the 80ms GPU inference line**; the
+    line is locked from a proper GPU run — `infrastructure/scripts/provision_cloud_gpu.sh`
+    provisions a rented A10G/L4 box and re-runs this benchmark (still pending).
+  - M5a pipeline-overhead floor (identity graph) for reference: p95 0.57–4.27ms/block.
+  Self-hosted remains the primary engine even though the first full budget
+  measurement (with network legs, on GPU) is still ahead.
 - **Utterance latency** (`cartesia` / `elevenlabs`): end-of-speech → first output frame,
   measured gateway-side (implemented in the Live Monitor as of M4c). Measured for Cartesia
   (2026-07-03 spike): ~500ms VAD hangover + ~0.8–1s fixed overhead + ~0.45× realtime;
@@ -131,7 +139,10 @@ Two latency metrics apply, one per latency model:
 5. **Return** — Transformed audio streamed back as binary PCM via WebSocket
 6. **Playback** — `AudioWorkletProcessor` reads from `SharedArrayBuffer` ring buffer and outputs to destination
 
-#### Latency Budget (per-frame path: `self_hosted` / `cloud_gpu` — target until measured in M5)
+#### Latency Budget (per-frame path: `self_hosted` / `cloud_gpu`)
+
+Server-side stages measured on real weights in M5b (laptop CPU: model inference
+p95 47.5ms, inside the 80ms line); network legs and the GPU run still pending.
 
 | Stage | Target | Notes |
 |-------|--------|-------|
@@ -501,12 +512,18 @@ class Backend:
 - `passthrough`: `push()` returns `[frame]` (1:1 echo).
 - `cartesia`: energy/RMS VAD buffers frames; on end-of-speech, wraps the utterance as WAV,
   POSTs to `/voice-changer/sse`, re-chunks the result into 1920-byte frames.
-- `self_hosted` / `cloud_gpu` (M5a): block-streaming ONNX inference — frames buffer into
-  100ms blocks, each converted with 200ms of left context; `push()` emits output frames
-  every block, so latency is block size + inference, independent of utterance length.
-  Models are `{model_id}.onnx` files (float32 `[1, N]` audio in/out at
+- `self_hosted` / `cloud_gpu` (M5a, tuned in M5b): block-streaming ONNX inference —
+  frames buffer into 60ms blocks, each converted with 140ms of left context; `push()`
+  emits output frames every block, so latency is block size + inference, independent of
+  utterance length. Block seams are crossfaded (`SELF_HOSTED_CROSSFADE_MS`, default 5ms
+  of held-back tail blended with the next block's re-rendering of the same span), and a
+  model that truncates a partial STFT hop per window (<25ms) still yields an exactly 1:1
+  output stream. Models are `{model_id}.onnx` files (float32 `[1, N]` audio in/out at
   `SELF_HOSTED_MODEL_SAMPLE_RATE`), resolved from `SELF_HOSTED_MODEL_DIR` or
-  `s3://$S3_BUCKET/models/`, LRU-cached per process.
+  `s3://$S3_BUCKET/models/`, LRU-cached per process. Real models are exported OpenVoice
+  V2 converters (M5b): the target speaker embedding is baked into the graph as the
+  `tgt_se` initializer; instant clone = run the exported SE encoder on a reference clip
+  and patch that initializer (`inference/app/export/clone.py`, no torch in the service).
 
 The gateway degrades to echo if inference is unavailable, and serializes all WS sends
 while a concurrent reader task forwards inference output.
@@ -668,8 +685,10 @@ utterance-segmented (walkie-talkie), with measured felt latency ~2s+ (§4.1).
 
 ### Phase 1 — MVP (Weeks 1–8)
 - [x] Core audio pipeline (AudioWorklet → WebSocket → server inference → playback) — M1/M4a
-- [ ] RVC model integration with ONNX optimization — M5 (next)
-- [x] Instant clone (short samples) — via Cartesia `/voices/clone` (M4b); OpenVoice variant moves to M5
+- [~] Real VC model on the streaming ONNX engine — OpenVoice V2 landed (M5b);
+      RVC single-graph export deferred (needs HuBERT+F0 ONNX composition)
+- [x] Instant clone (short samples) — Cartesia `/voices/clone` (M4b) **and**
+      self-hosted OpenVoice SE-baking clone (M5b), both behind `POST /voices`
 - [x] Preview Mode (mic → transform → speaker) — Live Monitor loop (M4a/M4c)
 - [x] Basic web UI (FastAPI + Jinja2 + HTMX): Voice Studio + Live Monitor — M4c
 - [ ] User authentication (Supabase) — M6

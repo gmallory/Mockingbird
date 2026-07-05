@@ -135,8 +135,9 @@ def main() -> None:
     parser.add_argument("--model", help="path to a .onnx voice model (default: identity graph)")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "coreml", "cpu"])
     parser.add_argument("--seconds", type=int, default=30)
-    parser.add_argument("--block-ms", type=int, default=100)
-    parser.add_argument("--context-ms", type=int, default=200)
+    # Defaults track the tuned production settings (config.py, M5b).
+    parser.add_argument("--block-ms", type=int, default=60)
+    parser.add_argument("--context-ms", type=int, default=140)
     parser.add_argument("--model-sample-rate", type=int, default=48000)
     asyncio.run(run(parser.parse_args()))
 

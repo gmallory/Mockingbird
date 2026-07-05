@@ -22,7 +22,7 @@ Before starting a milestone, read this file plus the relevant `agents/*.agent.md
 | → M4c | Voice Studio UI + voice selection | done (#14) |
 | **M5** | **Self-hosted GPU backend (RVC/OpenVoice) — primary engine** | **in progress** |
 | → M5a | Streaming ONNX engine + `cloud_gpu` mode + latency benchmark | done |
-| → **M5b** | **Real voice weights (RVC/OpenVoice ONNX export) + GPU measurement** | **next** |
+| → M5b | Real voice weights (OpenVoice V2 ONNX export) + instant clone + tuning | done (local); GPU bench run pending |
 | M6 | Auth (Supabase/JWT) + multi-user voice library | pending |
 | M7 | Infra / CI hardening (CI, Grafana; Dockerfiles/compose landed in #14) | pending |
 | M8 | Calling — Twilio WebRTC↔PSTN (PRODUCT_SPEC Phase 2) | pending |
@@ -220,17 +220,52 @@ interface from M4a. Backend swap only; no WS/gRPC contract change. Split like M4
 converted audio through an ONNX model end-to-end, degrades to passthrough when no
 model is available, and the benchmark's measured numbers are in PRODUCT_SPEC §4.1.
 
-### M5b — Real voice weights (RVC/OpenVoice export) — NEXT
+### M5b — Real voice weights (OpenVoice V2 export) + instant clone — DONE (local)
 
-- Export/produce a real voice-conversion model satisfying the M5a ONNX contract
-  (RVC ONNX export path first; OpenVoice v2 zero-shot as the alternative), wire it
-  to the `voices` registry, and re-run the benchmark with real weights on a GPU
-  (local `self_hosted` and rented `cloud_gpu`) — that measurement locks the 80ms
-  inference line in PRODUCT_SPEC §4.1. **Self-hosted remains primary even if the
-  first measurement misses 172ms.**
-- Tune `SELF_HOSTED_BLOCK_MS` (measured compute headroom allows 40–60ms) and add
-  crossfade at block seams if audible with real weights.
-- GPU provisioning script/docs for the rented-GPU (`cloud_gpu`) shape.
+**Engine decision:** shipped the **OpenVoice v2 zero-shot path** (the sanctioned
+alternative above) instead of RVC-first. Rationale: the OpenVoice tone-color
+converter exports to a *single* audio-in/audio-out ONNX graph satisfying the M5a
+contract, and its zero-shot cloning wires directly into the `voices` registry
+(clip → voice in seconds, no training job). RVC cannot satisfy the single-graph
+contract without composing HuBERT feature extraction + F0 estimation + synthesizer
+into one graph — deferred as its own work item (M5c candidate, needed for the
+§4.2 "HD Clone" tier).
+
+What landed:
+
+- **Vendored converter** (`inference/app/export/openvoice/`, MIT, trimmed to the
+  conversion path, state-dict compatible with the published
+  `myshell-ai/OpenVoiceV2` checkpoint). Deviations for streaming determinism:
+  posterior encoder runs at `tau=0` (mean, no sampling → no RandomNormal op),
+  and the *source* SE is computed in-graph from each ~200ms window.
+- **Export** (`scripts/export_openvoice_onnx.py`, torch via `uv sync --group
+  export`; the service itself never imports torch): downloads the 131MB
+  checkpoint, exports `models/openvoice/openvoice_converter.onnx` (template;
+  STFT is baked in as a conv — 22050Hz) + `openvoice_se_encoder.onnx`, verifies
+  both with ORT. The target voice lives in the graph's `tgt_se` initializer.
+- **Instant clone, torch-free** (`app/export/clone.py`): decode clip (stdlib WAV
+  or ffmpeg) → SE encoder → patch `tgt_se` into a copy of the template →
+  `{model_id}.onnx`. Wired into inference `POST /voices` for
+  `self_hosted`/`cloud_gpu`, so the existing gateway route + Studio UI work
+  unchanged; the stored `voice_id` **is** the streaming `model_id`.
+- **Streaming fixes/tuning** (`app/backends/self_hosted.py`): seam crossfade
+  (`SELF_HOSTED_CROSSFADE_MS=5` — held-back tail blended against the next
+  block's re-rendering of the same span); hop-truncation deficit rule (a model
+  dropping <25ms per window no longer compresses time — streams stay exactly
+  1:1); defaults tuned to `BLOCK_MS=60` / `CONTEXT_MS=140` on real-weight
+  measurements.
+- **Measured** (dev Mac M-series CPU, real weights, details in PRODUCT_SPEC
+  §4.1): per-block p95 47.5ms, RTF 0.77–0.83, ~107ms effective added latency.
+  Laptop CPU already beats the 80ms GPU inference line.
+- **Tests** (`tests/test_export_openvoice.py` + extended self-hosted/voices
+  tests): tiny random converter through the real torch→ONNX→ORT path
+  (determinism, dynamic lengths, SE patching, clone→stream end-to-end); module
+  skips cleanly without the export group.
+
+**Remaining (moves to the `cloud_gpu` bench run):** execute
+`infrastructure/scripts/provision_cloud_gpu.sh` on a rented A10G/L4 box to lock
+the 80ms GPU line in PRODUCT_SPEC §4.1 and validate `DEVICE=cuda` end-to-end.
+**Self-hosted remains primary regardless of that measurement.**
 
 ### M6 — Auth + multi-user voice library
 

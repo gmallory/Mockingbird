@@ -10,6 +10,9 @@ dependencies = [
     "grpcio>=1.81.1",
     "httpx>=0.28.1",
     "numpy>=2.1.0",
+    # onnx (not just onnxruntime) is a service dep: instant clone patches the
+    # tgt_se initializer inside the exported converter template (M5b).
+    "onnx>=1.22.0",
     "onnxruntime>=1.27.0",
     "pydantic-settings>=2.14.2",
     "python-multipart>=0.0.32",
@@ -20,10 +23,14 @@ dependencies = [
 [dependency-groups]
 dev = [
     "grpcio-tools>=1.81.1",
-    "onnx>=1.22.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.15.20",
+]
+# Offline model export only (scripts/export_openvoice_onnx.py + app/export/
+# openvoice*); the running service never needs torch.
+export = [
+    "torch>=2.12.1",
 ]
 
 [tool.ruff]

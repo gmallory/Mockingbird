@@ -102,6 +102,11 @@ class _SelfHostedSession(BackendSession):
         self._out = bytearray()
         self._sample_rate = 48000
         self._model_id = ""
+        # Seam crossfade (M5b): the last crossfade_ms of each converted block
+        # is held back and linearly blended with the head of the next block.
+        # Real VC models decode blocks independently, so seams click without
+        # it. Costs crossfade_ms of extra latency; 0 disables.
+        self._xfade_tail: np.ndarray | None = None
 
     async def push(self, pcm: bytes, sample_rate: int, model_id: str) -> list[bytes]:
         # The stream contract is fixed 48kHz/20ms frames; a mid-block
@@ -121,9 +126,14 @@ class _SelfHostedSession(BackendSession):
     async def flush(self) -> list[bytes]:
         if self._buf:
             return await self._convert_block(self._model_id, pad_final=True)
-        # No pending block, but a model whose output length isn't exactly
-        # proportional can leave a sub-frame residue in _out — pad and emit it
-        # rather than dropping the stream's final <20ms of audio.
+        # Release any held-back crossfade tail — it is real audio the stream
+        # still owes the listener.
+        if self._xfade_tail is not None:
+            self._out += _float_to_pcm(self._xfade_tail)
+            self._xfade_tail = None
+        # A model whose output length isn't exactly proportional can also
+        # leave a sub-frame residue in _out — pad and emit rather than drop
+        # the stream's final <20ms of audio.
         if self._out:
             frame_bytes = int(self._sample_rate * self._backend.frame_ms / 1000) * 2
             tail = bytes(self._out) + b"\x00" * (frame_bytes - len(self._out))
@@ -136,8 +146,9 @@ class _SelfHostedSession(BackendSession):
         self._buf = []
         block = _pcm_to_float(block_pcm)
 
-        converted = await self._backend.convert_block(
-            block, self._context, self._sample_rate, model_id
+        xfade = self._backend.xfade_samples(self._sample_rate)
+        converted, head = await self._backend.convert_block(
+            block, self._context, self._sample_rate, model_id, head_samples=xfade
         )
 
         # Slide the context window: keep the most recent context_samples of input.
@@ -145,6 +156,7 @@ class _SelfHostedSession(BackendSession):
         joined = np.concatenate([self._context, block])
         self._context = joined[-keep:] if keep else joined[:0]
 
+        converted = self._seam_crossfade(converted, head, xfade, pad_final)
         self._out += _float_to_pcm(converted)
         frame_bytes = int(self._sample_rate * self._backend.frame_ms / 1000) * 2
         frames: list[bytes] = []
@@ -155,6 +167,44 @@ class _SelfHostedSession(BackendSession):
             frames.append(bytes(self._out) + b"\x00" * (frame_bytes - len(self._out)))
             self._out.clear()
         return frames
+
+    def _seam_crossfade(
+        self, converted: np.ndarray, head: int, xfade: int, final: bool
+    ) -> np.ndarray:
+        """Blend block seams (M5b): real VC models decode each block
+        independently, so adjacent blocks meet with an audible click.
+
+        ``converted`` starts with ``head`` samples that re-render audio the
+        previous block already produced (rendered from this block's left
+        context). The previous block's last ``xfade`` samples were held back
+        instead of emitted; here the two renderings of that same time span are
+        linearly blended — old rendering fading out, new fading in — and this
+        block's own tail is held back for the next seam. Costs ``xfade``
+        samples of latency; disabled when crossfade_ms=0.
+        """
+        head_part, body = converted[:head], converted[head:]
+        pieces: list[np.ndarray] = []
+        if self._xfade_tail is not None:
+            tail = self._xfade_tail
+            self._xfade_tail = None
+            n = min(tail.size, head_part.size)
+            if n:
+                # Align at the seam (the ends): both slices end where the new
+                # block's own audio begins.
+                ramp = np.linspace(0.0, 1.0, n, dtype=np.float32)
+                pieces.append(tail[: tail.size - n])
+                pieces.append(tail[tail.size - n :] * (1.0 - ramp) + head_part[head - n :] * ramp)
+            else:
+                # Degraded block (no re-rendered head available): emit the held
+                # tail as-is so no audio is lost.
+                pieces.append(tail)
+        if xfade and not final and body.size:
+            hold = min(xfade, body.size)
+            pieces.append(body[: body.size - hold])
+            self._xfade_tail = body[body.size - hold :]
+        else:
+            pieces.append(body)
+        return np.concatenate(pieces) if len(pieces) > 1 else pieces[0]
 
 
 class SelfHostedBackend(InferenceBackend):
@@ -167,6 +217,7 @@ class SelfHostedBackend(InferenceBackend):
         frame_ms: int = 20,
         block_ms: int = 100,
         context_ms: int = 200,
+        crossfade_ms: int = 5,
         max_loaded_models: int = 4,
         s3_endpoint: str = "",
         s3_bucket: str = "",
@@ -180,6 +231,7 @@ class SelfHostedBackend(InferenceBackend):
         # (round() would turn 90ms/20ms into 4 frames = 80ms).
         self.block_frames = max(1, -(-block_ms // frame_ms))
         self._context_ms = context_ms
+        self._crossfade_ms = crossfade_ms
         self._max_loaded = max(1, max_loaded_models)
         self._s3_endpoint = s3_endpoint
         self._s3_bucket = s3_bucket
@@ -205,20 +257,33 @@ class SelfHostedBackend(InferenceBackend):
     def context_samples(self, sample_rate: int) -> int:
         return int(sample_rate * self._context_ms / 1000)
 
+    def xfade_samples(self, sample_rate: int) -> int:
+        return int(sample_rate * self._crossfade_ms / 1000)
+
     async def convert_block(
-        self, block: np.ndarray, context: np.ndarray, sample_rate: int, model_id: str
-    ) -> np.ndarray:
+        self,
+        block: np.ndarray,
+        context: np.ndarray,
+        sample_rate: int,
+        model_id: str,
+        head_samples: int = 0,
+    ) -> tuple[np.ndarray, int]:
         """Convert one block (with left context) through the ONNX model.
 
-        Returns exactly the block's worth of converted audio at ``sample_rate``.
-        Any failure passes the block through unchanged (never kills the stream).
+        Returns ``(audio, head)``: the block's converted audio at
+        ``sample_rate``, preceded by up to ``head_samples`` of the model's
+        re-rendering of the context that came before the block (``head`` says
+        how many actually made it — 0 when there was no context or on any
+        degrade path). The session crossfades that head against the previous
+        block's held-back tail. Any failure passes the block through unchanged
+        (never kills the stream).
         """
         if block.size == 0:
-            return block
+            return block, 0
         name = model_id or self._default_model
         session = await self._get_session(name)
         if session is None:
-            return block
+            return block, 0
 
         model_in = np.concatenate([context, block])
         if sample_rate != self._model_sample_rate:
@@ -232,16 +297,30 @@ class SelfHostedBackend(InferenceBackend):
             )
         except Exception as exc:  # noqa: BLE001 - any ORT failure degrades, never crashes
             log.warning("self_hosted.inference_failed", model=name, error=str(exc))
-            return block
+            return block, 0
         audio = np.asarray(model_out, dtype=np.float32).reshape(-1)
         if sample_rate != self._model_sample_rate:
             audio = _resample(audio, self._model_sample_rate, sample_rate)
 
         # The model saw context+block; output length may also differ from input
-        # length. Map back proportionally and keep only the block's share.
+        # length. Map back proportionally and keep the block's share, plus up
+        # to head_samples of the re-rendered context just before it.
         total_in = context.size + block.size
         block_share = max(1, round(audio.size * block.size / total_in)) if audio.size else 0
-        return audio[audio.size - block_share :]
+        block_share = min(block_share, audio.size)
+        # STFT-based models truncate a partial hop (<25ms) at the window end;
+        # proportional mapping would turn that into a few percent of time
+        # compression on every block. The window size is constant, so the next
+        # block re-renders exactly the truncated span — emitting the last
+        # block-worth instead keeps seams contiguous and the stream 1:1.
+        # Note: when this rule fires, head below becomes 0, so the seam
+        # crossfade is inactive for truncating models by construction — the
+        # deficit rule itself is what keeps their seams aligned.
+        deficit = block.size - block_share
+        if 0 < deficit <= int(sample_rate * 0.025):
+            block_share = min(block.size, audio.size)
+        head = min(head_samples, audio.size - block_share)
+        return audio[audio.size - block_share - head :], head
 
     async def _get_session(self, model_id: str):
         """LRU-cached ONNX session for ``model_id``; None when unresolvable."""
