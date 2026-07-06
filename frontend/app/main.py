@@ -45,3 +45,15 @@ async def studio(request: Request) -> HTMLResponse:
         "pages/studio.html",
         {"public_gateway_url": settings.public_gateway_url},
     )
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login(request: Request) -> HTMLResponse:
+    # Auth is enforced client-side (M6a): the page posts credentials to the
+    # gateway, stores the returned token, and gates the Studio. Serving the
+    # template is unconditional.
+    return templates.TemplateResponse(
+        request,
+        "pages/login.html",
+        {"public_gateway_url": settings.public_gateway_url},
+    )

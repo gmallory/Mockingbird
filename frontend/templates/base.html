@@ -10,8 +10,34 @@
     <nav class="nav">
       <a href="/">Live Monitor</a>
       <a href="/studio">Voice Studio</a>
+      <span id="nav-auth" style="margin-left:auto"></span>
     </nav>
     <main class="shell">{% block content %}{% endblock %}</main>
+    <script type="module">
+      // Auth-aware nav (M6a): show who is signed in + a logout link, or a sign-in
+      // link. Uses DOM APIs (not innerHTML) so the stored email is never injected
+      // as markup.
+      import { isLoggedIn, getUser, logout } from "/static/js/auth.js";
+      const el = document.getElementById("nav-auth");
+      if (el) {
+        if (isLoggedIn()) {
+          const user = getUser();
+          const who = document.createElement("span");
+          who.className = "muted";
+          who.textContent = (user && user.email) ? user.email : "signed in";
+          const out = document.createElement("a");
+          out.href = "#";
+          out.textContent = "Logout";
+          out.addEventListener("click", (e) => { e.preventDefault(); logout(); });
+          el.append(who, document.createTextNode(" · "), out);
+        } else {
+          const link = document.createElement("a");
+          link.href = "/login";
+          link.textContent = "Sign in";
+          el.append(link);
+        }
+      }
+    </script>
     {% block scripts %}{% endblock %}
   </body>
 </html>

@@ -47,6 +47,7 @@
 {% block scripts %}
 <script type="module">
   import { AudioEngine } from "/static/js/audio-engine/audio-engine.js";
+  import { authHeaders } from "/static/js/auth.js";
 
   const WS_URL = {{ public_ws_url | tojson }};
   const GATEWAY = {{ public_gateway_url | tojson }};
@@ -72,8 +73,11 @@
   }
 
   async function loadVoices() {
+    // Voice selection needs a signed-in user (the registry is per-user as of
+    // M6a); anonymous callers 401 here and the selector stays echo-only, so the
+    // demo loop still runs without logging in. WS auth itself arrives in M6b.
     try {
-      const resp = await fetch(`${GATEWAY}/voices`);
+      const resp = await fetch(`${GATEWAY}/voices`, { headers: authHeaders() });
       if (!resp.ok) return;
       for (const v of await resp.json()) {
         const opt = document.createElement("option");

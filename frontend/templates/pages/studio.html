@@ -35,8 +35,12 @@
 {% block scripts %}
 <script type="module">
   import { VoiceRecorder } from "/static/js/audio-engine/recorder.js";
+  import { requireAuth, authHeaders } from "/static/js/auth.js";
 
   const GATEWAY = {{ public_gateway_url | tojson }};
+  // Studio is gated (M6a): requireAuth() bounces to /login when not signed in;
+  // throwing halts the rest of the module so no unauthenticated setup runs.
+  if (!requireAuth()) throw new Error("not authenticated");
   const MAX_SECONDS = 20;
   const QUIET_PEAK = 0.03;
 
@@ -66,7 +70,8 @@
 
   async function loadVoices() {
     try {
-      const resp = await fetch(`${GATEWAY}/voices`);
+      const resp = await fetch(`${GATEWAY}/voices`, { headers: authHeaders() });
+      if (resp.status === 401) { window.location.href = "/login"; return; }
       if (!resp.ok) throw new Error(`GET /voices ${resp.status}`);
       const voices = await resp.json();
       if (!voices.length) {
@@ -151,7 +156,12 @@
       form.append("clip", new File([takeBlob], "sample.wav", { type: "audio/wav" }));
       form.append("label", label);
       form.append("language", "en");
-      const resp = await fetch(`${GATEWAY}/voices`, { method: "POST", body: form });
+      const resp = await fetch(`${GATEWAY}/voices`, {
+        method: "POST",
+        body: form,
+        headers: authHeaders(),
+      });
+      if (resp.status === 401) { window.location.href = "/login"; return; }
       if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
       const voice = await resp.json();
       setStatus(`Cloned "${voice.label}" ✓ — pick it on the Live Monitor.`);

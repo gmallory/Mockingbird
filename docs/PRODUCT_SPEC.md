@@ -423,17 +423,26 @@ Summary: binary raw PCM Int16 frames (20ms, 960 samples at 48kHz) both direction
 control messages `start` / `switch_model` / `stop` / `ping` client→server and `ready` /
 `model_loaded` / `error` (with `code`) / `degraded` / `pong` server→client.
 
-### REST API — implemented (M2–M4)
+### REST API — implemented (M2–M4, auth M6a)
 
-Unauthenticated, single-user (auth arrives in M6). Gateway on `:8000`, inference on `:8001`.
+`/voices` is per-user and requires a Supabase bearer token as of M6a; `/ws/voice`
+authentication is still pending (M6b). Gateway on `:3001`, inference on `:8001`.
 
-| Method | Endpoint | Service | Description |
-|--------|----------|---------|-------------|
-| GET | `/healthz` | gateway, inference | Health incl. Postgres/Redis (gateway) |
-| WS | `/ws/voice` | gateway | Binary audio streaming (contract above) |
-| GET | `/voices` | gateway | List cloned voices from the registry |
-| POST | `/voices` | gateway | Multipart `clip` + `label` + `language` → proxies to inference clone, persists row |
-| POST | `/voices` | inference | Multipart clone via Cartesia `/voices/clone`, returns `voice_id` (internal, called by gateway) |
+| Method | Endpoint | Service | Auth | Description |
+|--------|----------|---------|------|-------------|
+| GET | `/healthz` | gateway, inference | none | Health incl. Postgres/Redis (gateway) |
+| WS | `/ws/voice` | gateway | none (M6b) | Binary audio streaming (contract above) |
+| POST | `/auth/signup` | gateway | none | Proxy signup to Supabase (GoTrue); returns the session |
+| POST | `/auth/login` | gateway | none | Proxy password login to Supabase; returns the session |
+| GET | `/auth/me` | gateway | Bearer | Verify the token, return the mirrored local user |
+| GET | `/voices` | gateway | Bearer | List the caller's cloned voices |
+| POST | `/voices` | gateway | Bearer | Multipart `clip` + `label` + `language` → proxies to inference clone, persists a row owned by the caller |
+| POST | `/voices` | inference | none | Multipart clone, returns `voice_id` (internal, called by gateway) |
+
+Auth model (M6a): Supabase (GoTrue) mints access tokens; the gateway proxies
+signup/login to it and verifies the returned HS256 token offline against the project
+JWT secret. A local `User` row (id = Supabase `sub`) is mirrored on first authenticated
+request so `Voice.user_id` can FK to it.
 
 ### REST API — planned
 
@@ -691,7 +700,8 @@ utterance-segmented (walkie-talkie), with measured felt latency ~2s+ (§4.1).
       self-hosted OpenVoice SE-baking clone (M5b), both behind `POST /voices`
 - [x] Preview Mode (mic → transform → speaker) — Live Monitor loop (M4a/M4c)
 - [x] Basic web UI (FastAPI + Jinja2 + HTMX): Voice Studio + Live Monitor — M4c
-- [ ] User authentication (Supabase) — M6
+- [~] User authentication (Supabase) — REST auth + per-user voices landed (M6a);
+      `/ws/voice` auth + rate limiting pending (M6b)
 - [~] Single-server deployment — compose stack + dev.sh landed (#14); GPU node pending M5
 
 ### Phase 2 — Calling (Weeks 9–14)

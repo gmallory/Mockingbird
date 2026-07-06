@@ -10,7 +10,13 @@ dependencies = [
     "fastapi>=0.138.1",
     "greenlet>=3.5.3",
     "grpcio>=1.81.1",
+    # Runtime HTTP client: the /voices clone proxy (app/inference/http.py) and the
+    # Supabase auth proxy (app/auth/supabase.py) both call out over httpx off the
+    # hot path. It was previously dev-only, which under-declared a real runtime dep.
+    "httpx>=0.28.1",
     "pydantic-settings>=2.14.2",
+    # Verify Supabase-issued access tokens (HS256) on authenticated requests (M6a).
+    "pyjwt>=2.10.1",
     "python-multipart>=0.0.32",
     "redis>=8.0.1",
     "sqlmodel>=0.0.39",
@@ -22,7 +28,6 @@ dependencies = [
 [dependency-groups]
 dev = [
     "grpcio-tools>=1.81.1",
-    "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]

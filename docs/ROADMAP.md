@@ -23,7 +23,9 @@ Before starting a milestone, read this file plus the relevant `agents/*.agent.md
 | **M5** | **Self-hosted GPU backend (RVC/OpenVoice) — primary engine** | **in progress** |
 | → M5a | Streaming ONNX engine + `cloud_gpu` mode + latency benchmark | done |
 | → M5b | Real voice weights (OpenVoice V2 ONNX export) + instant clone + tuning | done (local); GPU bench run pending |
-| M6 | Auth (Supabase/JWT) + multi-user voice library | pending |
+| **M6** | **Auth (Supabase) + multi-user voice library** | **in progress** |
+| → M6a | Supabase token verification + `/auth` proxy + per-user `/voices` + login UI | done |
+| → M6b | Auth on the `/ws/voice` socket + per-user rate limiting | pending |
 | M7 | Infra / CI hardening (CI, Grafana; Dockerfiles/compose landed in #14) | pending |
 | M8 | Calling — Twilio WebRTC↔PSTN (PRODUCT_SPEC Phase 2) | pending |
 
@@ -267,11 +269,70 @@ What landed:
 the 80ms GPU line in PRODUCT_SPEC §4.1 and validate `DEVICE=cuda` end-to-end.
 **Self-hosted remains primary regardless of that measurement.**
 
-### M6 — Auth + multi-user voice library
+### M6 — Auth + multi-user voice library — IN PROGRESS (M6a done)
 
-Supabase/JWT on `/ws/voice` and `/voices`, per-user `voices` rows keyed to the existing
-user table, login-gated Studio. Reuses M2's user table. (Was M5; slid behind self-hosted
-per the 2026-07-04 priority decision.)
+Supabase-hosted auth on `/voices` (M6a) and later `/ws/voice` (M6b), per-user `voices`
+rows keyed to the existing user table, login-gated Studio. Reuses M2's user table. (Was
+M5; slid behind self-hosted per the 2026-07-04 priority decision.)
+
+**Auth mechanism (owner decision, 2026-07-05):** **Supabase (hosted)**, not the
+self-issued-JWT alternative. Supabase (GoTrue) owns credentials and mints access tokens;
+the gateway only **proxies** signup/login to it and **verifies** the returned token. This
+keeps password handling out of our code at the cost of a real Supabase project for the
+live login flow (the test suite stays offline — see below).
+
+### M6a — Supabase verification + `/auth` proxy + per-user `/voices` — DONE
+
+- **Config** (`gateway/app/config.py`): `supabase_url`, `supabase_anon_key`,
+  `supabase_jwt_secret`, `supabase_jwt_audience` (default `authenticated`).
+  `SUPABASE_JWT_SECRET` added to `.env.example`.
+- **Token verification** (`gateway/app/auth/jwt.py`): `verify_token()` decodes the
+  bearer token **offline** — HS256 against the project JWT secret, checking signature,
+  `exp`, and `aud` — and returns `TokenClaims{sub, email, display_name}`. Swapping to
+  Supabase's asymmetric (ES256 + JWKS) keys later is a change behind this one function.
+- **GoTrue client** (`gateway/app/auth/supabase.py`): thin httpx wrapper (mirrors
+  `app/inference/http.py`) — `signup()` → `POST /auth/v1/signup`, `login()` →
+  `POST /auth/v1/token?grant_type=password`; bubbles the upstream status via
+  `SupabaseAuthError` so bad credentials surface as 400/401, not a blanket 502.
+- **Dependencies** (`gateway/app/auth/dependencies.py`): `get_current_claims` (verify
+  bearer → 401) and `get_current_user` (lazily mirror the Supabase identity into a local
+  `User` row keyed by `sub`, reused thereafter; races resolved via unique-violation +
+  re-fetch).
+- **Routes** (`gateway/app/auth/routes.py`, `/auth`): `POST /auth/signup`,
+  `POST /auth/login` (proxy), `GET /auth/me` (whoami). Wired into `main.py`.
+- **Per-user voices**: `Voice.user_id` FK (`gateway/app/db/models.py`) + Alembic
+  migration `c4d2f8a17b9e` (clears pre-auth unowned rows, adds NOT NULL `user_id` +
+  index + FK). `GET /voices` filters to the caller; `POST /voices` stamps the caller as
+  owner. Both now require a valid token.
+- **Frontend**: `pages/login.html` + `GET /login` route (email/password, signup toggle);
+  `static/js/auth.js` (token in localStorage, Bearer helpers, `requireAuth`); Studio
+  gated + Bearer on its `/voices` calls; Monitor attaches the token when present and
+  stays echo-only when anonymous (the demo loop still runs logged-out); auth-aware nav
+  in `base.html`.
+- **Deps**: added `pyjwt`; promoted `httpx` from dev-only to a runtime dependency (the
+  clone proxy and the new Supabase client both use it at runtime).
+- **Tests** (`gateway/tests/test_auth.py` + updated `test_voices.py`): fully offline —
+  self-minted HS256 tokens exercise verification (accept/expired/bad-sig/wrong-aud/
+  missing-sub/unconfigured), `httpx.MockTransport` stands in for GoTrue (URL, apikey,
+  error mapping), routes driven via `httpx.ASGITransport`, per-user scoping + the
+  `get_current_user` upsert verified against Postgres (skips when it is down). No live
+  Supabase or key needed; the migration is verified by `alembic upgrade head`.
+
+**Done when (met):** `POST /voices` and `GET /voices` require a Supabase bearer token and
+are scoped to that user; `POST /auth/signup` / `POST /auth/login` return a session;
+`GET /auth/me` returns the mirrored user; the Studio is login-gated; `alembic upgrade
+head` applies the `user_id` FK; `uv run pytest` + `uv run ruff check` are green.
+
+**Manual (needs a real Supabase project):** set `SUPABASE_URL` / `SUPABASE_ANON_KEY` /
+`SUPABASE_JWT_SECRET`, sign up + sign in through `/login`, clone a voice, confirm it is
+listed only for that user.
+
+### M6b — Auth on the realtime socket + rate limiting — PENDING
+
+Authenticate `/ws/voice` (token in the query string / first control message), reuse
+`verify_token`; per-user concurrent-connection + usage limits (the `RateLimiter` from
+`agents/gateway.agent.md`) backed by Redis. Touches the audio hot path and the browser
+`websocket-worker`, so split out from M6a.
 
 ### M7 — Infra / CI hardening
 
