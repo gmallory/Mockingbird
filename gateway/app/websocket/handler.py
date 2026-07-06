@@ -74,9 +74,15 @@ async def voice_stream(
     limiter: RateLimiter,
     timeout_s: float = 2.0,
 ) -> None:
+    # Accept first, then enforce. A WebSocket close only carries an app-defined
+    # code (4001/4029) once the handshake has completed; closing *before* accept
+    # would reach the browser as a generic 1006, and the worker couldn't tell a
+    # terminal rejection from a flaky link (it would reconnect-storm instead of
+    # stopping). The gate below runs before the receive loop, so nothing the
+    # client sends in the meantime is ever read or acted on.
     await websocket.accept()
 
-    # --- Auth + rate-limit gate (before anything else on the wire) ----------
+    # --- Auth + rate-limit gate (before any frame is processed) -------------
     if auth.outcome == "rejected":
         with contextlib.suppress(Exception):
             await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason=auth.reason)
@@ -85,8 +91,10 @@ async def voice_stream(
     session_id = uuid4().hex
     acquired = False
     started_at = 0.0
-    if auth.authenticated:
-        assert auth.user_id is not None
+    # `and user_id is not None` narrows the type without an `assert` (assertions
+    # are stripped under `python -O`); resolve_ws_auth always sets user_id when
+    # authenticated, so this is the same invariant the finally block guards on.
+    if auth.authenticated and auth.user_id is not None:
         result = await limiter.acquire(auth.user_id, auth.plan, session_id)
         if not result.ok:
             with contextlib.suppress(Exception):

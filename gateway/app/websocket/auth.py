@@ -5,6 +5,13 @@ set headers on a WebSocket, so the query string is the idiomatic carrier). Auth 
 **optional by default** so the anonymous echo demo keeps working; set
 ``WS_REQUIRE_AUTH=true`` to lock the socket down.
 
+.. warning::
+   A query-string token lands in HTTP access logs and in any reverse proxy in
+   front of the socket, so redact the ``token`` param at those layers (the
+   browser WebSocket API offers no header carrier, so this is the tradeoff for
+   auth on the socket). This module itself logs only the rejection *reason*,
+   never the token.
+
 Three outcomes, resolved *before* the socket is accepted:
 
 * ``authenticated`` — a valid token: the session gets the user's id + plan and is
