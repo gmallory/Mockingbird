@@ -38,9 +38,25 @@ class Settings(BaseSettings):
     # InferenceUnavailable so the session degrades to passthrough promptly.
     inference_timeout_ms: int = 2000
 
-    # Cap on an uploaded clone clip so POST /voices (unauthenticated pre-M5) can't
-    # be used to exhaust memory with an oversized body.
+    # Cap on an uploaded clone clip so POST /voices can't be used to exhaust
+    # memory with an oversized body.
     max_clip_bytes: int = 10 * 1024 * 1024
+
+    # === Auth (M6a) — Supabase-hosted ===
+    # The gateway never mints tokens; Supabase (GoTrue) does. These drive two
+    # things: proxying signup/login to GoTrue (url + anon key, one-shot at login)
+    # and *verifying* the access token it returns (jwt secret) on every
+    # authenticated request. Verification is the only piece on the request path.
+    supabase_url: str = ""  # e.g. https://<ref>.supabase.co (env SUPABASE_URL)
+    supabase_anon_key: str = ""  # public anon key, sent as the GoTrue apikey header
+    # Legacy/symmetric project JWT secret (Supabase dashboard → Settings → API →
+    # JWT Secret). Access tokens are HS256-signed with it, so we can verify them
+    # offline with no JWKS round-trip. Moving to Supabase's asymmetric (ES256 +
+    # JWKS) keys later is a swap behind verify_token — callers only see TokenClaims.
+    supabase_jwt_secret: str = ""  # env SUPABASE_JWT_SECRET
+    # Supabase stamps aud="authenticated" on logged-in user tokens; verification
+    # requires it so a token minted for a different audience is rejected.
+    supabase_jwt_audience: str = "authenticated"
 
 
 settings = Settings()

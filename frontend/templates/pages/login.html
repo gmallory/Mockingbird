@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Mockingbird{% endblock %}
+
+{% block content %}
+<section class="auth">
+  <header>
+    <h1 id="form-title">Sign in</h1>
+    <p class="subtitle" id="form-sub">Sign in to clone and manage your voices in the Studio.</p>
+  </header>
+
+  <div class="clone-form auth-form">
+    <input id="email" class="input" type="email" placeholder="Email" aria-label="Email"
+           autocomplete="email" />
+    <input id="password" class="input" type="password" placeholder="Password"
+           aria-label="Password" autocomplete="current-password" />
+    <input id="display-name" class="input" type="text" placeholder="Display name (optional)"
+           aria-label="Display name" autocomplete="name" hidden />
+    <button id="submit" class="btn" type="button">Sign in</button>
+  </div>
+  <p id="status" class="status"></p>
+  <p class="muted">
+    <span id="toggle-prompt">No account?</span>
+    <a href="#" id="toggle">Create one</a>
+  </p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .auth-form { flex-direction: column; align-items: stretch; gap: .5rem; max-width: 22rem; }
+</style>
+<script type="module">
+  import { saveSession, isLoggedIn } from "/static/js/auth.js";
+
+  const GATEWAY = {{ public_gateway_url | tojson }};
+
+  // Already signed in — no reason to show the form.
+  if (isLoggedIn()) window.location.href = "/studio";
+
+  const title = document.getElementById("form-title");
+  const sub = document.getElementById("form-sub");
+  const email = document.getElementById("email");
+  const password = document.getElementById("password");
+  const displayName = document.getElementById("display-name");
+  const submit = document.getElementById("submit");
+  const statusEl = document.getElementById("status");
+  const togglePrompt = document.getElementById("toggle-prompt");
+  const toggle = document.getElementById("toggle");
+
+  let mode = "login"; // or "signup"
+  const setStatus = (msg) => { statusEl.textContent = msg; };
+
+  function applyMode() {
+    const signup = mode === "signup";
+    title.textContent = signup ? "Create account" : "Sign in";
+    sub.textContent = signup
+      ? "Create an account to clone and manage your own voices."
+      : "Sign in to clone and manage your voices in the Studio.";
+    submit.textContent = signup ? "Create account" : "Sign in";
+    password.autocomplete = signup ? "new-password" : "current-password";
+    displayName.hidden = !signup;
+    togglePrompt.textContent = signup ? "Already have an account?" : "No account?";
+    toggle.textContent = signup ? "Sign in" : "Create one";
+    setStatus("");
+  }
+
+  toggle.addEventListener("click", (e) => {
+    e.preventDefault();
+    mode = mode === "login" ? "signup" : "login";
+    applyMode();
+  });
+
+  async function submitForm() {
+    const e = email.value.trim();
+    const p = password.value;
+    if (!e || !p) { setStatus("Enter an email and password."); return; }
+    submit.disabled = true;
+    setStatus(mode === "signup" ? "Creating account…" : "Signing in…");
+    const body = { email: e, password: p };
+    if (mode === "signup" && displayName.value.trim()) {
+      body.display_name = displayName.value.trim();
+    }
+    try {
+      const resp = await fetch(`${GATEWAY}/auth/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setStatus(`${mode === "signup" ? "Sign up" : "Sign in"} failed: ` +
+          (data.detail || `HTTP ${resp.status}`));
+        submit.disabled = false;
+        return;
+      }
+      if (data.access_token) {
+        saveSession(data);
+        window.location.href = "/studio";
+        return;
+      }
+      // Signup with email confirmation on: no session yet.
+      setStatus("Account created. Confirm via the email we sent, then sign in.");
+      mode = "login";
+      applyMode();
+      submit.disabled = false;
+    } catch (err) {
+      setStatus("Network error: " + (err?.message || err));
+      submit.disabled = false;
+    }
+  }
+
+  submit.addEventListener("click", submitForm);
+  password.addEventListener("keydown", (e) => { if (e.key === "Enter") submitForm(); });
+</script>
+{% endblock %}

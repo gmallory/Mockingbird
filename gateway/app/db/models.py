@@ -1,10 +1,11 @@
 """Gateway database models (SQLModel).
 
-``User`` (M2) is the FK root that the rest of the schema hangs off. ``Voice`` (M4b)
-is the single-user voice registry: one row per cloned Cartesia voice, persisted so
-a speaker can be rendered as it on the streaming path. Per-user ownership (an FK to
-``User``) and the ``CallRecord`` table from agents/gateway.agent.md are deferred to
-the milestone that first reads them (M5 auth / M8 calling).
+``User`` (M2) is the FK root that the rest of the schema hangs off; its ``id`` is
+the Supabase auth user id (``sub``), mirrored locally on first authenticated
+request (M6a). ``Voice`` (M4b) is the voice registry: one row per cloned voice,
+persisted so a speaker can be rendered as it on the streaming path. As of M6a each
+voice is owned by a ``User`` (``user_id`` FK); the ``CallRecord`` table from
+agents/gateway.agent.md is still deferred to the milestone that first reads it (M8).
 """
 
 from datetime import UTC, datetime
@@ -38,8 +39,14 @@ def _utcnow() -> datetime:
 
 
 class User(SQLModel, table=True):
+    # ``id`` is the Supabase auth user id (``sub``); this row is a *mirror* of the
+    # Supabase identity, materialized on first authenticated request (M6a).
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    email: str = Field(unique=True, index=True)
+    # Indexed for lookups but intentionally NOT unique: Supabase owns identity and
+    # its email policy, so the mirror must not impose a second uniqueness rule that
+    # could turn an otherwise-valid token into a write conflict. Email is a cached
+    # display attribute here; the ``sub`` (id) is the identity.
+    email: str = Field(index=True)
     display_name: str
     plan: Plan = Field(default=Plan.FREE, sa_column=_plan_column())
     monthly_minutes_used: float = 0.0
@@ -63,14 +70,19 @@ class User(SQLModel, table=True):
 
 
 class Voice(SQLModel, table=True):
-    """A cloned voice in the single-user registry (M4b).
+    """A cloned voice in the registry (M4b), owned by a ``User`` (M6a).
 
-    ``voice_id`` is the Cartesia id minted by the inference clone route; it feeds
-    straight into the voice-changer ``voice[id]`` when this voice is selected.
-    ``label`` is the human name shown in the UI (M4c).
+    ``voice_id`` is the id minted by the inference clone route (Cartesia voice id
+    or self-hosted ONNX model id); it feeds straight into the streaming path when
+    this voice is selected. ``label`` is the human name shown in the UI (M4c).
+    ``user_id`` scopes the registry per user: ``GET /voices`` lists only the
+    caller's rows and ``POST /voices`` stamps the authenticated caller as owner.
     """
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    # Owner (Supabase auth id, mirrored in ``user``). Indexed because every list
+    # query filters on it. Not nullable: a voice always belongs to someone.
+    user_id: UUID = Field(foreign_key="user.id", index=True)
     voice_id: str = Field(unique=True, index=True)
     label: str
     language: str

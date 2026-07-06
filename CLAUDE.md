@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mockingbird is **under active implementation** (no longer pre-implementation). The three Python services
 exist and have test suites: `frontend/`, `gateway/`, and `inference/` (plus `infrastructure/`, `proto/`).
-Milestones **M1–M4** are done (M4a/b/c all landed), plus **M5a/M5b**:
+Milestones **M1–M4** are done (M4a/b/c all landed), plus **M5a/M5b** and **M6a**:
 
 - **M1** — vertical echo slice (mic → WS → gateway echo → playback).
 - **M2** — data foundation: gateway Postgres + Redis, wired to `/healthz`.
@@ -20,10 +20,14 @@ Milestones **M1–M4** are done (M4a/b/c all landed), plus **M5a/M5b**:
   `voice_id` **is** the streaming `model_id`), seam crossfade + exact 1:1 stream accounting,
   block/context tuned on real-weight measurements (60ms/140ms; ~107ms added latency, RTF ~0.8
   on a laptop CPU). RVC single-graph export deferred (needs HuBERT+F0 composition).
+- **M6a** — Supabase-hosted auth: the gateway verifies Supabase access tokens offline (HS256
+  against the project JWT secret) and proxies signup/login to GoTrue; `/voices` is per-user
+  (Bearer-gated, `Voice.user_id` FK, mirror `User` row keyed by Supabase `sub`); login-gated
+  Studio + `/login` page. WS-socket auth + rate limiting deferred to M6b.
 
 The canonical milestone tracker — current state and the concrete next steps (the rented-GPU
-`cloud_gpu` bench run closing M5; then M6 auth, M7 CI/observability, M8 calling) — is
-**[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus
+`cloud_gpu` bench run closing M5; M6b WS-socket auth + rate limiting; then M7 CI/observability,
+M8 calling) — is **[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus
 the relevant `agents/*.agent.md` before picking up work. `docs/PRODUCT_SPEC.md` remains the detailed spec
 (data models, API design, latency budgets). Still verify a directory/command/file exists before assuming
 it — parts of the planned layout (auth, self-hosted GPU, calling) are not built yet.
