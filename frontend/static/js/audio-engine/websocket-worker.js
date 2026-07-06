@@ -14,17 +14,25 @@ import { floatTo16, int16ToFloat } from "./utils/audio-utils.js";
 /** @type {WebSocket | null} */
 let ws = null;
 let url = "";
+let token = null;
 let modelId = null;
 let sampleRate = 48000;
 let intentionalClose = false;
 let backoffMs = 1000;
 const MAX_BACKOFF = 30000;
 
+// App-defined close codes the gateway uses to reject a socket (M6b). These are
+// terminal: reconnecting with the same (missing/expired) token or over the same
+// limit would just loop, so surface the reason and stop instead of backing off.
+const WS_CLOSE_UNAUTHORIZED = 4001;
+const WS_CLOSE_RATE_LIMITED = 4029;
+
 self.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
     case "connect":
       url = msg.url;
+      token = msg.token ?? null;
       modelId = msg.modelId ?? null;
       sampleRate = msg.sampleRate ?? 48000;
       intentionalClose = false;
@@ -45,8 +53,17 @@ self.onmessage = (e) => {
   }
 };
 
+// Append the auth token as a query param when present (the browser can't set a
+// header on a WebSocket). No token -> anonymous echo-only session, which the
+// gateway still accepts by default.
+function wsUrl() {
+  if (!token) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}token=${encodeURIComponent(token)}`;
+}
+
 function connect() {
-  ws = new WebSocket(url);
+  ws = new WebSocket(wsUrl());
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
@@ -71,9 +88,16 @@ function connect() {
 
   ws.onerror = () => self.postMessage({ type: "error", message: "websocket error" });
 
-  ws.onclose = () => {
+  ws.onclose = (event) => {
     self.postMessage({ type: "disconnected" });
     if (intentionalClose) return;
+    // Auth / rate-limit rejections are terminal — don't reconnect-storm. Report
+    // the reason up so the UI can prompt a re-login or back off.
+    if (event.code === WS_CLOSE_UNAUTHORIZED || event.code === WS_CLOSE_RATE_LIMITED) {
+      const kind = event.code === WS_CLOSE_UNAUTHORIZED ? "unauthorized" : "rate_limited";
+      self.postMessage({ type: "control", data: { type: kind, message: event.reason || "" } });
+      return;
+    }
     setTimeout(connect, backoffMs);
     backoffMs = Math.min(MAX_BACKOFF, backoffMs * 2);
   };

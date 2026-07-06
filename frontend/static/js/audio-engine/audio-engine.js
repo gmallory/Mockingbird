@@ -90,7 +90,7 @@ export class AudioEngine {
 
   // ----- lifecycle --------------------------------------------------------
 
-  async start(modelId = null) {
+  async start(modelId = null, token = null) {
     const chunkSize = Math.round((this.config.sampleRate * this.config.chunkSizeMs) / 1000);
 
     this.mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -139,6 +139,7 @@ export class AudioEngine {
     this.wsWorker.postMessage({
       type: "connect",
       url: this.config.websocketUrl,
+      token,
       modelId,
       sampleRate: this.config.sampleRate,
     });
@@ -267,10 +268,15 @@ export class AudioEngine {
         break;
       }
       case "control": {
-        // ready / pong / model_loaded / degraded / error.
+        // ready / pong / model_loaded / degraded / error / unauthorized / rate_limited.
         const ctrl = data.data;
         if (ctrl?.type === "error") this._emit("error", ctrl.message);
         else if (ctrl?.type === "degraded") this._emit("degraded", ctrl.message);
+        // Terminal auth/limit rejections from the worker (WS closed, no retry).
+        else if (ctrl?.type === "unauthorized")
+          this._emit("authError", ctrl.message || "session expired — please log in again");
+        else if (ctrl?.type === "rate_limited")
+          this._emit("limited", ctrl.message || "connection limit reached");
         break;
       }
     }

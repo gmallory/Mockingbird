@@ -58,5 +58,12 @@ class Settings(BaseSettings):
     # requires it so a token minted for a different audience is rejected.
     supabase_jwt_audience: str = "authenticated"
 
+    # === Realtime socket auth (M6b) ===
+    # /ws/voice takes its token from a ?token=<jwt> query param. Auth is optional
+    # by default so the anonymous echo demo keeps working (no token -> echo-only,
+    # never voice conversion); flip this on to reject any tokenless connection with
+    # WS close 4001. An invalid/expired token is rejected regardless of this flag.
+    ws_require_auth: bool = False
+
 
 settings = Settings()

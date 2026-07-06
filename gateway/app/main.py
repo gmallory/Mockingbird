@@ -20,7 +20,9 @@ from app.auth import router as auth_router
 from app.config import settings
 from app.db.session import engine
 from app.logging import configure_logging
+from app.rate_limit import RateLimiter
 from app.voices import router as voices_router
+from app.websocket.auth import resolve_ws_auth
 from app.websocket.handler import voice_stream
 
 log = structlog.get_logger(__name__)
@@ -92,8 +94,16 @@ async def healthz() -> JSONResponse:
 
 @app.websocket("/ws/voice")
 async def ws_voice(websocket: WebSocket) -> None:
+    # Auth rides in the query string (the browser can't set WS headers). Classify
+    # before accepting; the handler enforces the outcome + per-user limits. The
+    # limiter shares the app's Redis client, or None (bare TestClient / no
+    # lifespan) in which case it fail-opens — the anonymous demo needs no Redis.
+    auth = await resolve_ws_auth(websocket.query_params.get("token"))
+    limiter = RateLimiter(getattr(websocket.app.state, "redis", None))
     await voice_stream(
         websocket,
         settings.inference_grpc_url,
+        auth=auth,
+        limiter=limiter,
         timeout_s=settings.inference_timeout_ms / 1000,
     )

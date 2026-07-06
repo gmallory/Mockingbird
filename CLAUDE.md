@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mockingbird is **under active implementation** (no longer pre-implementation). The three Python services
 exist and have test suites: `frontend/`, `gateway/`, and `inference/` (plus `infrastructure/`, `proto/`).
-Milestones **M1–M4** are done (M4a/b/c all landed), plus **M5a/M5b** and **M6a**:
+Milestones **M1–M4** are done (M4a/b/c all landed), plus **M5a/M5b** and **M6a/M6b**:
 
 - **M1** — vertical echo slice (mic → WS → gateway echo → playback).
 - **M2** — data foundation: gateway Postgres + Redis, wired to `/healthz`.
@@ -23,11 +23,18 @@ Milestones **M1–M4** are done (M4a/b/c all landed), plus **M5a/M5b** and **M6a
 - **M6a** — Supabase-hosted auth: the gateway verifies Supabase access tokens offline (HS256
   against the project JWT secret) and proxies signup/login to GoTrue; `/voices` is per-user
   (Bearer-gated, `Voice.user_id` FK, mirror `User` row keyed by Supabase `sub`); login-gated
-  Studio + `/login` page. WS-socket auth + rate limiting deferred to M6b.
+  Studio + `/login` page.
+- **M6b** — auth on the realtime socket + per-user rate limiting: `/ws/voice` reads a
+  `?token=<jwt>` query param and classifies the connection before accept —
+  authenticated (rate-limited), anonymous echo-only demo (default), or rejected (close
+  4001). Optional by default (`WS_REQUIRE_AUTH` flag) so the demo survives; an invalid
+  token is always rejected. Redis `RateLimiter` enforces per-plan concurrency (atomic Lua
+  over a per-user sorted set) + monthly minutes (close 4029), fail-open on a Redis outage.
+  Browser worker appends the token and stops retrying on 4001/4029.
 
 The canonical milestone tracker — current state and the concrete next steps (the rented-GPU
-`cloud_gpu` bench run closing M5; M6b WS-socket auth + rate limiting; then M7 CI/observability,
-M8 calling) — is **[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus
+`cloud_gpu` bench run closing M5; then M7 CI/observability, M8 calling) — is
+**[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus
 the relevant `agents/*.agent.md` before picking up work. `docs/PRODUCT_SPEC.md` remains the detailed spec
 (data models, API design, latency budgets). Still verify a directory/command/file exists before assuming
 it — parts of the planned layout (auth, self-hosted GPU, calling) are not built yet.
@@ -45,12 +52,13 @@ Mockingbird is a **portfolio / learning** project — optimize for clean archite
 not production hardening. Bias toward small, compartmentalized specs (one service or one vertical slice at a
 time) and surface key decisions for explicit sign-off before implementing.
 
-M4 and M5a/M5b are done locally (real OpenVoice V2 weights streaming through the self-hosted
-engine, instant clone, tuned latency). **Current focus: close M5 with the rented-GPU
-(`cloud_gpu`) benchmark run** (`infrastructure/scripts/provision_cloud_gpu.sh`), then M6 auth.
-Per the 2026-07-04 owner decision self-hosted is the first-priority engine; Cartesia and
-`cloud_gpu` are separate modes, not fallbacks. See [docs/ROADMAP.md](docs/ROADMAP.md) for the
-per-step breakdown.
+M4, M5a/M5b, and M6 (auth) are done locally (real OpenVoice V2 weights streaming through the
+self-hosted engine, instant clone, tuned latency; Supabase auth on `/voices` and `/ws/voice`
+with per-user rate limiting). **Two things remain open: close M5 with the rented-GPU
+(`cloud_gpu`) benchmark run** (`infrastructure/scripts/provision_cloud_gpu.sh`), then **M7**
+(CI + observability). Per the 2026-07-04 owner decision self-hosted is the first-priority
+engine; Cartesia and `cloud_gpu` are separate modes, not fallbacks. See
+[docs/ROADMAP.md](docs/ROADMAP.md) for the per-step breakdown.
 
 ## Architecture
 
