@@ -23,9 +23,9 @@ Before starting a milestone, read this file plus the relevant `agents/*.agent.md
 | **M5** | **Self-hosted GPU backend (RVC/OpenVoice) — primary engine** | **in progress** |
 | → M5a | Streaming ONNX engine + `cloud_gpu` mode + latency benchmark | done |
 | → M5b | Real voice weights (OpenVoice V2 ONNX export) + instant clone + tuning | done (local); GPU bench run pending |
-| **M6** | **Auth (Supabase) + multi-user voice library** | **in progress** |
+| **M6** | **Auth (Supabase) + multi-user voice library** | **done** |
 | → M6a | Supabase token verification + `/auth` proxy + per-user `/voices` + login UI | done |
-| → M6b | Auth on the `/ws/voice` socket + per-user rate limiting | pending |
+| → M6b | Auth on the `/ws/voice` socket + per-user rate limiting | done |
 | M7 | Infra / CI hardening (CI, Grafana; Dockerfiles/compose landed in #14) | pending |
 | M8 | Calling — Twilio WebRTC↔PSTN (PRODUCT_SPEC Phase 2) | pending |
 
@@ -269,7 +269,7 @@ What landed:
 the 80ms GPU line in PRODUCT_SPEC §4.1 and validate `DEVICE=cuda` end-to-end.
 **Self-hosted remains primary regardless of that measurement.**
 
-### M6 — Auth + multi-user voice library — IN PROGRESS (M6a done)
+### M6 — Auth + multi-user voice library — DONE (M6a + M6b)
 
 Supabase-hosted auth on `/voices` (M6a) and later `/ws/voice` (M6b), per-user `voices`
 rows keyed to the existing user table, login-gated Studio. Reuses M2's user table. (Was
@@ -327,12 +327,54 @@ head` applies the `user_id` FK; `uv run pytest` + `uv run ruff check` are green.
 `SUPABASE_JWT_SECRET`, sign up + sign in through `/login`, clone a voice, confirm it is
 listed only for that user.
 
-### M6b — Auth on the realtime socket + rate limiting — PENDING
+### M6b — Auth on the realtime socket + rate limiting — DONE
 
-Authenticate `/ws/voice` (token in the query string / first control message), reuse
-`verify_token`; per-user concurrent-connection + usage limits (the `RateLimiter` from
-`agents/gateway.agent.md`) backed by Redis. Touches the audio hot path and the browser
-`websocket-worker`, so split out from M6a.
+Authenticated `/ws/voice` + per-user Redis rate limiting, reusing `verify_token`.
+Two owner decisions (2026-07-06) shaped it: **optional auth** (a flag, not a hard
+requirement) and a **fail-open** limiter — both to keep the anonymous echo demo and
+the "session survives an infra outage" posture that M6a established.
+
+What landed:
+
+- **Socket auth** (`gateway/app/websocket/auth.py`): `resolve_ws_auth(token)` runs
+  *before* the socket is accepted and returns one of three outcomes —
+  `authenticated` (valid token → user id + plan, rate-limited), `anonymous` (no
+  token and `WS_REQUIRE_AUTH` off → echo-only demo), or `rejected` (bad token
+  always, or missing token when the flag is on → the handler closes **4001**). A
+  present-but-invalid token is never silently downgraded to anonymous. The token
+  rides in a `?token=<jwt>` query param (the browser can't set WS headers).
+  `load_user_plan` reads the plan off the connect path (one lookup), defaulting to
+  FREE if Postgres is unreachable.
+- **Rate limiting** (`gateway/app/rate_limit/limiter.py`): `RateLimiter` over Redis
+  with per-plan caps from `agents/gateway.agent.md` (`PLAN_LIMITS`: Free 1 conn / 5
+  min, Pro 3 / 300, Enterprise 10 / unlimited). Concurrency is a per-user sorted set
+  admitted by a single atomic Lua step (prune stale slots → count → add under cap);
+  usage is a per-month `INCRBYFLOAT` counter that resets on the calendar rollover.
+  `acquire()` on connect (over cap → close **4029**), `release()` + `record_usage()`
+  on close. Fail-open: a Redis outage (or a `None` client, e.g. a bare `TestClient`)
+  admits the session unenforced and logs.
+- **Handler** (`gateway/app/websocket/handler.py`): auth/limit gate after
+  `accept()`, before `ready`; anonymous sessions are **echo-locked** (model id pinned
+  to `""`, `switch_model` refused with `auth_required`) so a demo visitor can't drive
+  conversion with someone else's voice id; slot released + duration banked in the
+  `finally`. `main.py` extracts the query token, resolves auth, and builds the
+  limiter from `app.state.redis` (or `None`).
+- **Config**: `ws_require_auth` (env `WS_REQUIRE_AUTH`, default false), in `.env.example`.
+- **Browser**: `websocket-worker.js` appends `?token=` and treats 4001/4029 closes as
+  terminal (no reconnect-storm); `audio-engine.js` `start(modelId, token)` forwards
+  the token and emits `authError` / `limited`; `monitor.html` passes `getToken()` and
+  surfaces both (logged-out visitors still get the echo demo).
+- **Tests**: `tests/test_rate_limit.py` (concurrency, usage, per-plan caps, fail-open;
+  real Redis, skips when down) + `tests/test_ws_voice.py` additions (anonymous
+  echo-lock, tokenless-when-required → 4001, invalid token → 4001, authenticated
+  round-trip, `acquire`-denied → 4029, real-Redis concurrency enforced end-to-end via
+  the lifespan, `load_user_plan` against Postgres). `uv run pytest` is green (48) with
+  Redis + Postgres up.
+
+**Done when (met):** a valid `?token=` yields an authenticated, rate-limited session;
+no token yields the echo-only demo (unless `WS_REQUIRE_AUTH=true` → 4001); an invalid
+token → 4001; over a plan's concurrency cap or monthly minutes → 4029; the browser
+stops retrying on those; a Redis outage degrades to unenforced rather than dropping.
 
 ### M7 — Infra / CI hardening
 

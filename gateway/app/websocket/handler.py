@@ -4,6 +4,16 @@ Binary PCM frames are proxied to the inference service over a gRPC ``Convert``
 stream; converted frames are sent back to the browser. The control channel
 (start / switch_model / stop / ping) is unchanged.
 
+**Auth + limits (M6b).** The connection is classified before the socket is
+accepted (:func:`app.websocket.auth.resolve_ws_auth`): a valid token yields an
+*authenticated* session (rate-limited, may select a voice); no token yields an
+*anonymous* echo-only demo session (the model id is pinned to echo, so no
+conversion and no limits); a bad token — or a missing one when
+``WS_REQUIRE_AUTH`` is set — is *rejected* and the socket is closed with 4001.
+Authenticated sessions claim a per-user concurrency slot on open (over the plan
+cap -> close 4029) and record their duration against the monthly usage counter on
+close. Rate limiting is fail-open: a Redis outage admits the session unenforced.
+
 The conversion stream is **decoupled**: a clip-based backend buffers a whole
 utterance and emits a burst of output frames only once the speaker pauses, so
 output frames do not line up 1:1 with input frames. We therefore pump inbound
@@ -24,12 +34,16 @@ session degrades to passthrough: the original audio is echoed back and a
 
 import asyncio
 import contextlib
+import time
 from dataclasses import dataclass
+from uuid import uuid4
 
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from app.inference.client import InferenceSession, InferenceUnavailable
+from app.rate_limit import RateLimiter
+from app.websocket.auth import WsAuth
 from app.websocket.protocol import (
     DegradedMessage,
     ErrorMessage,
@@ -39,17 +53,57 @@ from app.websocket.protocol import (
     client_message_adapter,
 )
 
+# App-defined WebSocket close codes (4000-4999). Match agents/gateway.agent.md.
+WS_CLOSE_UNAUTHORIZED = 4001
+WS_CLOSE_RATE_LIMITED = 4029
+
 
 @dataclass
 class _SessionState:
+    authenticated: bool = False
     sample_rate: int = 48000
     model_id: str = ""
     degraded: bool = False
 
 
-async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2.0) -> None:
+async def voice_stream(
+    websocket: WebSocket,
+    grpc_url: str,
+    *,
+    auth: WsAuth,
+    limiter: RateLimiter,
+    timeout_s: float = 2.0,
+) -> None:
+    # Accept first, then enforce. A WebSocket close only carries an app-defined
+    # code (4001/4029) once the handshake has completed; closing *before* accept
+    # would reach the browser as a generic 1006, and the worker couldn't tell a
+    # terminal rejection from a flaky link (it would reconnect-storm instead of
+    # stopping). The gate below runs before the receive loop, so nothing the
+    # client sends in the meantime is ever read or acted on.
     await websocket.accept()
-    state = _SessionState()
+
+    # --- Auth + rate-limit gate (before any frame is processed) -------------
+    if auth.outcome == "rejected":
+        with contextlib.suppress(Exception):
+            await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason=auth.reason)
+        return
+
+    session_id = uuid4().hex
+    acquired = False
+    started_at = 0.0
+    # `and user_id is not None` narrows the type without an `assert` (assertions
+    # are stripped under `python -O`); resolve_ws_auth always sets user_id when
+    # authenticated, so this is the same invariant the finally block guards on.
+    if auth.authenticated and auth.user_id is not None:
+        result = await limiter.acquire(auth.user_id, auth.plan, session_id)
+        if not result.ok:
+            with contextlib.suppress(Exception):
+                await websocket.close(code=WS_CLOSE_RATE_LIMITED, reason=result.reason)
+            return
+        acquired = True
+        started_at = time.monotonic()
+
+    state = _SessionState(authenticated=auth.authenticated)
     session = InferenceSession(grpc_url, timeout_s=timeout_s)
     out_lock = asyncio.Lock()
     reader_task: asyncio.Task | None = None
@@ -142,6 +196,11 @@ async def voice_stream(websocket: WebSocket, grpc_url: str, timeout_s: float = 2
         await session.aclose()
         with contextlib.suppress(Exception):
             await websocket.close()
+        # Release the concurrency slot and bank this session's duration. Both are
+        # best-effort inside the limiter, so a Redis outage here never raises.
+        if acquired and auth.user_id is not None:
+            await limiter.release(auth.user_id, session_id)
+            await limiter.record_usage(auth.user_id, time.monotonic() - started_at)
 
 
 async def _handle_control(send_json, state: _SessionState, text: str) -> bool:
@@ -156,9 +215,17 @@ async def _handle_control(send_json, state: _SessionState, text: str) -> bool:
         await send_json(PongMessage().model_dump())
     elif msg.type == "start":
         state.sample_rate = msg.sampleRate
-        state.model_id = msg.modelId or ""
+        # Anonymous sessions are echo-only: pin the model to "" so a demo visitor
+        # can never drive conversion with someone else's voice id. Voices are
+        # per-user (M6a), so an authenticated caller's id rides each frame as usual.
+        state.model_id = (msg.modelId or "") if state.authenticated else ""
         await send_json(ReadyMessage().model_dump())
     elif msg.type == "switch_model":
+        if not state.authenticated:
+            await send_json(
+                ErrorMessage(code="auth_required", message="log in to select a voice").model_dump()
+            )
+            return False
         # The selected voice id rides on each subsequent audio frame's model_id;
         # ack so the client knows the gateway will convert to it from now on.
         state.model_id = msg.modelId

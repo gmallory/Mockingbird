@@ -47,7 +47,7 @@
 {% block scripts %}
 <script type="module">
   import { AudioEngine } from "/static/js/audio-engine/audio-engine.js";
-  import { authHeaders } from "/static/js/auth.js";
+  import { authHeaders, getToken } from "/static/js/auth.js";
 
   const WS_URL = {{ public_ws_url | tojson }};
   const GATEWAY = {{ public_gateway_url | tojson }};
@@ -118,6 +118,16 @@
     statusEl.textContent = "Error: " + (err?.message || err);
   });
 
+  // Terminal auth/limit rejections from the gateway (M6b). The socket is closed
+  // and won't retry, so reset the UI and tell the user what to do.
+  function stopWithMessage(text) {
+    running = false;
+    toggleBtn.textContent = "Start";
+    statusEl.textContent = text;
+  }
+  engine.on("authError", (msg) => stopWithMessage(msg + " (Log in again to convert; echo still works.)"));
+  engine.on("limited", (msg) => stopWithMessage(msg + " Close another session or try again later."));
+
   toggleBtn.addEventListener("click", async () => {
     if (running) {
       await engine.stop();
@@ -129,7 +139,9 @@
     try {
       toggleBtn.disabled = true;
       statusEl.textContent = "Requesting microphone…";
-      await engine.start(voiceSelect.value || null);
+      // Pass the token so an authenticated session can convert and is
+      // rate-limited; logged-out visitors send none and get the echo-only demo.
+      await engine.start(voiceSelect.value || null, getToken());
       running = true;
       toggleBtn.textContent = "Stop";
       statusEl.textContent = "Speak a phrase, then pause — you'll hear it back in the cloned voice " +
