@@ -213,3 +213,7 @@ CLAUDE.local.md
 /spike_listen/
 /spike_control/
 *.m4a
+
+# Exported ONNX voice models + downloaded checkpoints (large binaries; rebuild
+# with inference/scripts/export_openvoice_onnx.py)
+inference/models/

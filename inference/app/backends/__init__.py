@@ -47,6 +47,7 @@ def get_backend(settings: Settings) -> InferenceBackend:
             frame_ms=settings.frame_ms,
             block_ms=settings.self_hosted_block_ms,
             context_ms=settings.self_hosted_context_ms,
+            crossfade_ms=settings.self_hosted_crossfade_ms,
             max_loaded_models=settings.self_hosted_max_loaded_models,
             s3_endpoint=settings.s3_endpoint,
             s3_bucket=settings.s3_bucket,

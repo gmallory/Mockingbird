@@ -57,6 +57,7 @@ def _backend(model_dir, **overrides) -> SelfHostedBackend:
         "frame_ms": 20,
         "block_ms": 100,  # 5 frames per block
         "context_ms": 40,
+        "crossfade_ms": 0,  # seam blending off: keeps M5a cadence/exactness tests literal
         "max_loaded_models": 4,
     }
     params.update(overrides)
@@ -171,6 +172,113 @@ async def test_default_model_used_when_frame_has_none(model_dir):
         out += await session.push(_frame(8000), 48000, "")
     peak = np.abs(np.frombuffer(b"".join(out), dtype=np.int16)).max()
     assert peak < 5000  # halved -> the default model ran
+
+
+def _write_truncating_model(path, drop: int) -> None:
+    """audio_out = audio_in[:, :-drop] — models an STFT partial-hop truncation."""
+    inp = helper.make_tensor_value_info("audio", TensorProto.FLOAT, [1, None])
+    out = helper.make_tensor_value_info("out", TensorProto.FLOAT, [1, None])
+    starts = helper.make_tensor("starts", TensorProto.INT64, [1], [0])
+    ends = helper.make_tensor("ends", TensorProto.INT64, [1], [-drop])
+    axes = helper.make_tensor("axes", TensorProto.INT64, [1], [1])
+    node = helper.make_node("Slice", ["audio", "starts", "ends", "axes"], ["out"])
+    graph = helper.make_graph([node], "trunc", [inp], [out], initializer=[starts, ends, axes])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 8
+    onnx.save(model, str(path))
+
+
+async def test_hop_truncating_model_does_not_compress_time(model_dir):
+    """A model that drops <25ms per window must still yield a 1:1 stream.
+
+    Without the deficit rule, a constant per-window truncation (OpenVoice
+    drops a partial STFT hop) becomes a few percent time compression on every
+    block — hundreds of ms lost over a call.
+    """
+    _write_truncating_model(model_dir / "trunc.onnx", drop=500)  # ~10ms @48kHz
+    backend = _backend(model_dir)
+    session = backend.open_session()
+    out = []
+    for _ in range(20):  # 4 blocks
+        out += await session.push(_frame(8000), 48000, "trunc")
+    out += await session.flush()
+    assert sum(len(f) for f in out) // 2 == 20 * _FRAME_SAMPLES
+
+
+# ----- seam crossfade (M5b) ---------------------------------------------------
+
+
+async def test_crossfade_preserves_total_sample_count(model_dir):
+    """Holdback shifts emission by crossfade_ms but flush releases every sample."""
+    backend = _backend(model_dir, crossfade_ms=5)  # 240 samples @48kHz
+    session = backend.open_session()
+    out = []
+    for _ in range(12):
+        out += await session.push(_frame(8000), 48000, "identity")
+    out += await session.flush()
+    total = sum(len(f) for f in out) // 2
+    assert total == 12 * _FRAME_SAMPLES
+    assert all(len(f) == _FRAME_BYTES for f in out)
+
+
+async def test_crossfade_blends_the_seam(model_dir):
+    """A gain step between blocks must ramp across the seam, not jump."""
+    backend = _backend(model_dir, crossfade_ms=5, context_ms=40)
+    session = backend.open_session()
+    out = []
+    # Block 1 under identity (8000), block 2 under halver (4000 from the same
+    # input): the seam between them must pass through intermediate values.
+    for _ in range(5):
+        out += await session.push(_frame(8000), 48000, "identity")
+    for _ in range(5):
+        out += await session.push(_frame(8000), 48000, "halver")
+    out += await session.flush()
+    samples = np.abs(np.frombuffer(b"".join(out), dtype=np.int16))
+    seam = samples[(samples > 4500) & (samples < 7500)]
+    assert seam.size > 0, "expected blended samples between 4000 and 8000 at the seam"
+    # The blend region is bounded by the crossfade length.
+    assert seam.size <= int(48000 * 5 / 1000)
+
+
+async def test_crossfade_zero_is_bit_exact_passthrough(model_dir):
+    """crossfade_ms=0 keeps the M5a exact int16 round-trip guarantee."""
+    backend = _backend(model_dir, crossfade_ms=0)
+    session = backend.open_session()
+    out = []
+    for _ in range(5):
+        out += await session.push(_frame(8000), 48000, "identity")
+    assert b"".join(out) == _frame(8000) * 5
+
+
+async def test_crossfade_degraded_block_loses_no_audio(model_dir):
+    """Model disappearing mid-stream: held tail still emitted, count preserved."""
+    backend = _backend(model_dir, crossfade_ms=5, default_model="")
+    session = backend.open_session()
+    out = []
+    for _ in range(5):
+        out += await session.push(_frame(8000), 48000, "identity")
+    for _ in range(5):
+        out += await session.push(_frame(8000), 48000, "no-such-model")  # degrades
+    out += await session.flush()
+    total = sum(len(f) for f in out) // 2
+    assert total == 10 * _FRAME_SAMPLES
+
+
+async def test_crossfade_with_truncating_model_stays_1to1(model_dir):
+    """Deficit rule and seam crossfade together must still yield a 1:1 stream.
+
+    The crossfade head is non-zero on a truncating model once context exists,
+    so the crossfade runs — but the held tail and the next block's re-rendered
+    head cover the same real-time span, so no samples are gained or lost.
+    """
+    _write_truncating_model(model_dir / "trunc.onnx", drop=500)  # ~10ms @48kHz
+    backend = _backend(model_dir, crossfade_ms=5)
+    session = backend.open_session()
+    out = []
+    for _ in range(20):  # 4 blocks
+        out += await session.push(_frame(8000), 48000, "trunc")
+    out += await session.flush()
+    assert sum(len(f) for f in out) // 2 == 20 * _FRAME_SAMPLES
 
 
 # ----- error posture: degrade, never crash -----------------------------------

@@ -33,12 +33,23 @@ class Settings(BaseSettings):
     # Model used when a frame carries no model_id (same role as cartesia_voice_id).
     self_hosted_default_model: str = ""
     # Sample rate the ONNX model expects; audio is resampled in/out when it
-    # differs from the stream's 48kHz.
-    self_hosted_model_sample_rate: int = 48000
+    # differs from the stream's 48kHz. Default matches the M5b OpenVoice V2
+    # export (and .env.example) — a mismatch here fails *silently* as
+    # wrong-pitch audio, so only change it for models that natively take
+    # another rate.
+    self_hosted_model_sample_rate: int = 22050
     # Streaming block size: latency floor of the self-hosted path. Each block is
     # converted with `context_ms` of already-heard audio prepended for continuity.
-    self_hosted_block_ms: int = 100
-    self_hosted_context_ms: int = 200
+    # Defaults tuned on real OpenVoice weights (M5b): 60/140 gives p95 ~48ms per
+    # block and ~107ms effective added latency on an M-series CPU; the window
+    # (context+block) drives compute, so raising context back to 200 at 60ms
+    # blocks pushes real-time factor past 1.0 on CPU.
+    self_hosted_block_ms: int = 60
+    self_hosted_context_ms: int = 140
+    # Seam smoothing (M5b): each block's last crossfade_ms is held back and
+    # blended with the next block's re-rendering of the same span. Adds that
+    # much latency; 0 disables.
+    self_hosted_crossfade_ms: int = 5
     self_hosted_max_loaded_models: int = 4
 
     # S3/MinIO model storage: models missing from self_hosted_model_dir are
