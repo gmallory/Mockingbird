@@ -223,8 +223,9 @@ async def test_voices_require_auth() -> None:
 
 
 async def test_create_voice_rejects_oversized_clip(monkeypatch) -> None:
-    # Fails on the size cap before the session or owner is touched, so a dummy
-    # session/user the route never dereferences past ``.id`` is fine.
+    # FastAPI resolves the get_session/get_current_user overrides before the body
+    # runs, but _read_clip raises 413 before the route touches the session or
+    # ``user.id``, so a bare object() session and a throwaway user are fine here.
     async def _override_session():
         yield object()
 

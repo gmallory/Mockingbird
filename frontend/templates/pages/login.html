@@ -9,11 +9,12 @@
   </header>
 
   <div class="clone-form auth-form">
-    <input id="email" class="input" type="email" placeholder="Email" autocomplete="email" />
+    <input id="email" class="input" type="email" placeholder="Email" aria-label="Email"
+           autocomplete="email" />
     <input id="password" class="input" type="password" placeholder="Password"
-           autocomplete="current-password" />
+           aria-label="Password" autocomplete="current-password" />
     <input id="display-name" class="input" type="text" placeholder="Display name (optional)"
-           autocomplete="name" hidden />
+           aria-label="Display name" autocomplete="name" hidden />
     <button id="submit" class="btn" type="button">Sign in</button>
   </div>
   <p id="status" class="status"></p>
