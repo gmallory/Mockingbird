@@ -45,7 +45,8 @@ from app.inference.client import InferenceSession, InferenceUnavailable
 from app.metrics import (
     WS_DEGRADED_TOTAL,
     WS_FIRST_OUTPUT_SECONDS,
-    WS_FRAMES_TOTAL,
+    WS_FRAMES_IN,
+    WS_FRAMES_OUT,
     WS_SESSION_SECONDS,
     WS_SESSIONS_ACTIVE,
     WS_SESSIONS_TOTAL,
@@ -114,9 +115,6 @@ async def voice_stream(
         started_at = time.monotonic()
 
     mode = "authenticated" if auth.authenticated else "anonymous"
-    WS_SESSIONS_TOTAL.labels(outcome="accepted").inc()
-    WS_SESSIONS_ACTIVE.labels(mode=mode).inc()
-    session_opened_at = time.monotonic()
 
     state = _SessionState(authenticated=auth.authenticated)
     session = InferenceSession(grpc_url, timeout_s=timeout_s)
@@ -129,7 +127,7 @@ async def voice_stream(
             await websocket.send_json(payload)
 
     async def send_bytes(data: bytes) -> None:
-        WS_FRAMES_TOTAL.labels(direction="out").inc()
+        WS_FRAMES_OUT.inc()
         async with out_lock:
             await websocket.send_bytes(data)
 
@@ -164,6 +162,11 @@ async def voice_stream(
             pass
         await degrade()
 
+    # Inc directly before the try whose finally holds the dec, with nothing
+    # fallible in between — any other placement can drift the gauge.
+    WS_SESSIONS_TOTAL.labels(outcome="accepted").inc()
+    WS_SESSIONS_ACTIVE.labels(mode=mode).inc()
+    session_opened_at = time.monotonic()
     try:
         # First message should be `start`, but we stay lenient: signal readiness.
         await send_json(ReadyMessage().model_dump())
@@ -176,7 +179,7 @@ async def voice_stream(
 
             data_bytes = message.get("bytes")
             if data_bytes is not None:
-                WS_FRAMES_TOTAL.labels(direction="in").inc()
+                WS_FRAMES_IN.inc()
                 if first_in_at is None:
                     first_in_at = time.monotonic()
                 if state.degraded:
@@ -212,6 +215,11 @@ async def voice_stream(
     except WebSocketDisconnect:
         pass
     finally:
+        # Metrics first, before any await below — an exception or cancellation
+        # delivered mid-teardown (uvicorn reload with open sessions) must not
+        # skip the dec, or the active gauge drifts upward for good.
+        WS_SESSIONS_ACTIVE.labels(mode=mode).dec()
+        WS_SESSION_SECONDS.observe(time.monotonic() - session_opened_at)
         # Cancel the reader before closing the socket so its send path can never
         # race websocket.close() — out_lock serializes sends, not the close.
         if reader_task is not None:
@@ -221,8 +229,6 @@ async def voice_stream(
         await session.aclose()
         with contextlib.suppress(Exception):
             await websocket.close()
-        WS_SESSIONS_ACTIVE.labels(mode=mode).dec()
-        WS_SESSION_SECONDS.observe(time.monotonic() - session_opened_at)
         # Release the concurrency slot and bank this session's duration. Both are
         # best-effort inside the limiter, so a Redis outage here never raises.
         if acquired and auth.user_id is not None:

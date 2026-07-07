@@ -10,9 +10,11 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel superseded PR runs, but never a main run — two quick merges must not
+# leave main without a completed CI result.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:

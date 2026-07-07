@@ -1,7 +1,8 @@
 """Prometheus metrics (M7): /metrics endpoint + Convert stream instrumentation.
 
 Metrics live on the process-global default registry, so assertions are deltas
-around the action under test, never absolute values.
+around the action under test, never absolute values. Reads go through the
+public ``REGISTRY.get_sample_value`` API rather than child internals.
 """
 
 import httpx
@@ -9,21 +10,12 @@ from prometheus_client import REGISTRY
 
 from app.backends.passthrough import PassthroughBackend
 from app.health import app
-from app.metrics import ACTIVE_STREAMS, FRAMES_TOTAL
 from app.proto_gen import audio_pb2
 from app.server import VoiceConversionServicer
 
 
-def _frames_value(direction: str) -> float:
-    return FRAMES_TOTAL.labels(direction=direction)._value.get()
-
-
-def _convert_count(backend: str) -> float:
-    # Histogram sample count for one backend label, via the public registry API.
-    value = REGISTRY.get_sample_value(
-        "mockingbird_inference_convert_seconds_count", {"backend": backend}
-    )
-    return value or 0.0
+def _sample(name: str, **labels) -> float:
+    return REGISTRY.get_sample_value(name, labels or None) or 0.0
 
 
 async def test_metrics_endpoint_serves_prometheus_exposition():
@@ -45,16 +37,22 @@ async def test_convert_stream_records_frames_and_latency():
         for pcm in frames:
             yield audio_pb2.AudioFrame(pcm=pcm, sample_rate=48000, model_id="")
 
-    in_before = _frames_value("in")
-    out_before = _frames_value("out")
-    observed_before = _convert_count("PassthroughBackend")
+    in_before = _sample("mockingbird_inference_frames_total", direction="in")
+    out_before = _sample("mockingbird_inference_frames_total", direction="out")
+    observed_before = _sample(
+        "mockingbird_inference_convert_seconds_count", backend="PassthroughBackend"
+    )
+    active_before = _sample("mockingbird_inference_active_streams")
 
     out = [resp.pcm async for resp in servicer.Convert(_requests(), context=None)]
 
     assert out == frames
-    assert _frames_value("in") == in_before + 3
-    assert _frames_value("out") == out_before + 3
+    assert _sample("mockingbird_inference_frames_total", direction="in") == in_before + 3
+    assert _sample("mockingbird_inference_frames_total", direction="out") == out_before + 3
     # Passthrough emits on every push: one histogram observation per frame.
-    assert _convert_count("PassthroughBackend") == observed_before + 3
-    # Stream finished; the gauge nets back to zero.
-    assert ACTIVE_STREAMS._value.get() == 0
+    assert (
+        _sample("mockingbird_inference_convert_seconds_count", backend="PassthroughBackend")
+        == observed_before + 3
+    )
+    # Stream finished; the gauge nets back to where it started.
+    assert _sample("mockingbird_inference_active_streams") == active_before

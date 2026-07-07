@@ -2,25 +2,22 @@
 
 Metrics live on the process-global default registry, so assertions are deltas
 around the action under test, never absolute values — other tests in the run
-move the same counters.
+move the same counters. Reads go through the public ``REGISTRY.get_sample_value``
+API rather than child internals.
 """
 
 import socket
 
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY
 
 from app.config import settings
 from app.main import app
-from app.metrics import (
-    WS_FRAMES_TOTAL,
-    WS_SESSIONS_ACTIVE,
-    WS_SESSIONS_TOTAL,
-)
 
 
-def _counter(counter, **labels) -> float:
-    return counter.labels(**labels)._value.get()
+def _sample(name: str, **labels) -> float:
+    return REGISTRY.get_sample_value(name, labels or None) or 0.0
 
 
 def _free_port() -> int:
@@ -48,9 +45,10 @@ def test_ws_session_counts_frames_and_outcomes(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "inference_grpc_url", f"localhost:{_free_port()}")
 
     client = TestClient(app)
-    accepted_before = _counter(WS_SESSIONS_TOTAL, outcome="accepted")
-    frames_in_before = _counter(WS_FRAMES_TOTAL, direction="in")
-    frames_out_before = _counter(WS_FRAMES_TOTAL, direction="out")
+    accepted_before = _sample("mockingbird_gateway_ws_sessions_total", outcome="accepted")
+    frames_in_before = _sample("mockingbird_gateway_ws_audio_frames_total", direction="in")
+    frames_out_before = _sample("mockingbird_gateway_ws_audio_frames_total", direction="out")
+    active_before = _sample("mockingbird_gateway_ws_sessions_active", mode="anonymous")
 
     # Anonymous echo session; inference is unreachable, so the session degrades
     # to passthrough — the frame still counts once in and once out (the echo).
@@ -62,8 +60,15 @@ def test_ws_session_counts_frames_and_outcomes(monkeypatch: pytest.MonkeyPatch):
             if "bytes" in msg and msg["bytes"] is not None:
                 break
 
-    assert _counter(WS_SESSIONS_TOTAL, outcome="accepted") == accepted_before + 1
-    assert _counter(WS_FRAMES_TOTAL, direction="in") == frames_in_before + 1
-    assert _counter(WS_FRAMES_TOTAL, direction="out") >= frames_out_before + 1
-    # The session closed, so the active gauge is back where it started (0 net).
-    assert WS_SESSIONS_ACTIVE.labels(mode="anonymous")._value.get() == 0
+    assert (
+        _sample("mockingbird_gateway_ws_sessions_total", outcome="accepted") == accepted_before + 1
+    )
+    assert (
+        _sample("mockingbird_gateway_ws_audio_frames_total", direction="in") == frames_in_before + 1
+    )
+    assert (
+        _sample("mockingbird_gateway_ws_audio_frames_total", direction="out")
+        >= frames_out_before + 1
+    )
+    # The session closed, so the active gauge nets back to where it started.
+    assert _sample("mockingbird_gateway_ws_sessions_active", mode="anonymous") == active_before

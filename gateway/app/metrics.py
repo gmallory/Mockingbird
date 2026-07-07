@@ -38,6 +38,10 @@ WS_FRAMES_TOTAL = Counter(
     "Binary audio frames through /ws/voice.",
     ["direction"],  # in (browser->gateway) | out (gateway->browser)
 )
+# Hot-path children bound once: .labels() is a lock + dict lookup, and these
+# fire per 20ms frame (~50/s each way per session).
+WS_FRAMES_IN = WS_FRAMES_TOTAL.labels(direction="in")
+WS_FRAMES_OUT = WS_FRAMES_TOTAL.labels(direction="out")
 
 WS_DEGRADED_TOTAL = Counter(
     "mockingbird_gateway_ws_degraded_sessions_total",
