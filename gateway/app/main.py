@@ -18,6 +18,8 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 
 from app.auth import router as auth_router
+from app.calls import router as calls_router
+from app.calls.media import twilio_media_stream
 from app.config import settings
 from app.db.session import engine
 from app.logging import configure_logging
@@ -57,6 +59,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(voices_router)
+app.include_router(calls_router)
 
 
 async def _check_db() -> bool:
@@ -116,3 +119,10 @@ async def ws_voice(websocket: WebSocket) -> None:
         limiter=limiter,
         timeout_s=settings.inference_timeout_ms / 1000,
     )
+
+
+@app.websocket("/ws/twilio/{call_id}")
+async def ws_twilio(websocket: WebSocket, call_id: str) -> None:
+    # Twilio's Media Stream for a live call (M8a). Gated by the per-call secret
+    # minted at call creation (Twilio can't send auth headers on the stream).
+    await twilio_media_stream(websocket, call_id, websocket.query_params.get("secret"))

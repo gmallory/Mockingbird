@@ -34,8 +34,21 @@ class PingMessage(BaseModel):
     type: Literal["ping"] = "ping"
 
 
+class JoinCallMessage(BaseModel):
+    """Attach this session to a live call's media bridge (M8a).
+
+    ``callId`` is the CallRecord id returned by ``POST /api/calls/outbound``.
+    Only the authenticated owner of the call may join; on success the session's
+    converted output is routed to the phone leg instead of echoed back, and the
+    callee's audio arrives as binary frames.
+    """
+
+    type: Literal["join_call"] = "join_call"
+    callId: str  # noqa: N815
+
+
 ClientMessage = Annotated[
-    StartMessage | SwitchModelMessage | StopMessage | PingMessage,
+    StartMessage | SwitchModelMessage | StopMessage | PingMessage | JoinCallMessage,
     Field(discriminator="type"),
 ]
 
@@ -63,6 +76,11 @@ class ErrorMessage(BaseModel):
 
 class PongMessage(BaseModel):
     type: Literal["pong"] = "pong"
+
+
+class CallJoinedMessage(BaseModel):
+    type: Literal["call_joined"] = "call_joined"
+    callId: str  # noqa: N815
 
 
 class DegradedMessage(BaseModel):

@@ -181,6 +181,20 @@ export class AudioEngine {
     this.wsWorker?.postMessage({ type: "switch_model", modelId });
   }
 
+  /**
+   * Attach this session to a live call's media bridge (M8a). The gateway then
+   * routes converted audio to the phone leg and streams the callee's audio
+   * back; emits 'callJoined' on the gateway's ack.
+   * @param {string} callId CallRecord id from POST /api/calls/outbound
+   */
+  joinCall(callId) {
+    this.wsWorker?.postMessage({ type: "join_call", callId });
+  }
+
+  leaveCall() {
+    this.wsWorker?.postMessage({ type: "leave_call" });
+  }
+
   setTransformEnabled(enabled) {
     this.transformEnabled = enabled;
     this.captureNode?.port.postMessage({ type: enabled ? "start" : "stop" });
@@ -277,6 +291,7 @@ export class AudioEngine {
           this._emit("authError", ctrl.message || "session expired — please log in again");
         else if (ctrl?.type === "rate_limited")
           this._emit("limited", ctrl.message || "connection limit reached");
+        else if (ctrl?.type === "call_joined") this._emit("callJoined", ctrl.callId);
         break;
       }
     }

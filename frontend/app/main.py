@@ -47,6 +47,20 @@ async def studio(request: Request) -> HTMLResponse:
     )
 
 
+@app.get("/dialer", response_class=HTMLResponse)
+async def dialer(request: Request) -> HTMLResponse:
+    # Login-gated client-side like the Studio; needs both the REST base (place/
+    # hang up calls) and the WS URL (the live audio session that joins the call).
+    return templates.TemplateResponse(
+        request,
+        "pages/dialer.html",
+        {
+            "public_gateway_url": settings.public_gateway_url,
+            "public_ws_url": settings.public_ws_url,
+        },
+    )
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login(request: Request) -> HTMLResponse:
     # Auth is enforced client-side (M6a): the page posts credentials to the

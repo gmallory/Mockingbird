@@ -16,6 +16,7 @@ let ws = null;
 let url = "";
 let token = null;
 let modelId = null;
+let callId = null;
 let sampleRate = 48000;
 let intentionalClose = false;
 let backoffMs = 1000;
@@ -50,6 +51,14 @@ self.onmessage = (e) => {
       modelId = msg.modelId;
       send({ type: "switch_model", modelId });
       break;
+    case "join_call":
+      // Remember the call so a mid-call reconnect re-joins its media bridge.
+      callId = msg.callId;
+      send({ type: "join_call", callId });
+      break;
+    case "leave_call":
+      callId = null; // gateway side ends with the call; nothing to send
+      break;
   }
 };
 
@@ -69,6 +78,7 @@ function connect() {
   ws.onopen = () => {
     backoffMs = 1000;
     send({ type: "start", modelId, sampleRate });
+    if (callId) send({ type: "join_call", callId });
     self.postMessage({ type: "connected" });
   };
 

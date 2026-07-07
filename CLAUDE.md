@@ -9,13 +9,15 @@ Mockingbird is under active implementation. The three Python services exist and 
 done**: echo slice, Postgres/Redis, gRPC proxy + swappable backends, Cartesia conversion + cloning +
 Studio UI, self-hosted OpenVoice V2 streaming engine, Supabase auth (REST + WebSocket, per-user
 rate limiting), and CI/observability (GitHub Actions, Prometheus `/metrics`, Grafana latency dashboard).
+**M8a** (outbound Twilio PSTN calls: `/api/calls`, media-stream bridge, `/dialer` UI) is built and
+tested offline; the live-Twilio run remains.
 
 **Do not trust this paragraph to stay current.** The canonical milestone tracker — current state,
 per-milestone detail, and the concrete next steps (the rented-GPU `cloud_gpu` bench run closing M5;
-then M8 calling) — is **[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus the
+the live-Twilio M8a run; then M8b) — is **[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus the
 relevant `agents/*.agent.md` before picking up work. `docs/PRODUCT_SPEC.md` remains the detailed spec
 (data models, API design, latency budgets). Still verify a directory/command/file exists before
-assuming it — later roadmap items (M8 calling) are not built yet.
+assuming it — later roadmap items (M8b) are not built yet.
 
 ## What this project is
 
