@@ -4,8 +4,8 @@
 the Supabase auth user id (``sub``), mirrored locally on first authenticated
 request (M6a). ``Voice`` (M4b) is the voice registry: one row per cloned voice,
 persisted so a speaker can be rendered as it on the streaming path. As of M6a each
-voice is owned by a ``User`` (``user_id`` FK); the ``CallRecord`` table from
-agents/gateway.agent.md is still deferred to the milestone that first reads it (M8).
+voice is owned by a ``User`` (``user_id`` FK). ``CallRecord`` (M8a) is the
+call history: one row per outbound PSTN call placed through Twilio.
 """
 
 from datetime import UTC, datetime
@@ -24,14 +24,29 @@ class Plan(StrEnum):
     ENTERPRISE = "enterprise"
 
 
+class CallDirection(StrEnum):
+    OUTBOUND = "outbound"
+    INBOUND = "inbound"  # reserved for M8b (dedicated inbound numbers)
+
+
+class CallStatus(StrEnum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 # By default SQLAlchemy stores a Python enum by member *name* ("FREE"); pin it to
 # the lowercase *value* ("free") so the PG enum labels follow Postgres convention
 # and match raw SQL / cross-service reads instead of the Python identifiers.
-def _plan_column() -> Column:
+def _enum_column(enum_cls: type[StrEnum], name: str) -> Column:
     return Column(
-        SAEnum(Plan, name="plan", values_callable=lambda e: [m.value for m in e]),
+        SAEnum(enum_cls, name=name, values_callable=lambda e: [m.value for m in e]),
         nullable=False,
     )
+
+
+def _plan_column() -> Column:
+    return _enum_column(Plan, "plan")
 
 
 def _utcnow() -> datetime:
@@ -87,3 +102,34 @@ class Voice(SQLModel, table=True):
     label: str
     language: str
     created_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
+
+
+class CallRecord(SQLModel, table=True):
+    """One outbound PSTN call placed through Twilio (M8a).
+
+    ``id`` doubles as the media-bridge call id: it names the ``/ws/twilio/{id}``
+    stream endpoint in the TwiML and the ``join_call`` target for the browser
+    session. ``voice_id`` is the registry row whose voice the call was placed
+    with (nullable — an echo/passthrough call has none). Lifecycle: ``active``
+    on create, then ``completed``/``failed`` via the Twilio status callback or
+    an explicit hangup.
+    """
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="user.id", index=True)
+    voice_id: UUID | None = Field(default=None, foreign_key="voice.id")
+    direction: CallDirection = Field(
+        default=CallDirection.OUTBOUND,
+        sa_column=_enum_column(CallDirection, "calldirection"),
+    )
+    status: CallStatus = Field(
+        default=CallStatus.ACTIVE,
+        sa_column=_enum_column(CallStatus, "callstatus"),
+    )
+    phone_number: str
+    # Twilio's call SID, set once the REST create succeeds; the status callback
+    # correlates on it. Indexed for that webhook lookup.
+    twilio_call_sid: str | None = Field(default=None, index=True)
+    started_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
+    ended_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    duration_sec: float = 0.0

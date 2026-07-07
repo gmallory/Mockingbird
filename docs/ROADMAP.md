@@ -27,7 +27,9 @@ Before starting a milestone, read this file plus the relevant `agents/*.agent.md
 | → M6a | Supabase token verification + `/auth` proxy + per-user `/voices` + login UI | done |
 | → M6b | Auth on the `/ws/voice` socket + per-user rate limiting | done |
 | **M7** | **Infra / CI hardening (GitHub Actions CI + Prometheus/Grafana)** | **done** |
-| M8 | Calling — Twilio WebRTC↔PSTN (PRODUCT_SPEC Phase 2) | pending |
+| **M8** | **Calling — Twilio PSTN (PRODUCT_SPEC Phase 2)** | **in progress** |
+| → M8a | Outbound PSTN calls + media-stream bridge + dialer UI | done (local); live Twilio run pending |
+| → M8b | Inbound calls, recording, WebRTC peer calls | pending |
 
 ## Backend priority (owner decision, 2026-07-04)
 
@@ -424,10 +426,66 @@ the compose images on every PR; `docker compose -f infrastructure/docker-compose
 up` serves a Grafana latency dashboard at `http://localhost:3002/d/mockingbird-latency`
 fed by Prometheus scraping both services' `/metrics`.
 
-### M8 — Calling (PRODUCT_SPEC Phase 2)
+### M8 — Calling (PRODUCT_SPEC Phase 2) — IN PROGRESS (M8a done locally)
 
-Twilio WebRTC↔PSTN, dialer UI with contacts/history, mid-call model switching, call
-recording.
+Twilio PSTN calling, dialer UI with history, mid-call model switching, call
+recording. Split: **M8a** = outbound calls end-to-end (landed); **M8b** = inbound
+calls, recording, WebRTC peer calls, contacts.
 
 Mapping to PRODUCT_SPEC §13: M4 + M5 complete Phase 1 (MVP, including the GPU path);
 M6 adds auth; M7 is the deployment/observability cut of Phase 1; M8 begins Phase 2.
+
+### M8a — Outbound PSTN + media-stream bridge + dialer — DONE (local)
+
+**Architecture (decided in-slice, follows existing patterns):** the gateway drives
+Twilio's REST API through a thin httpx wrapper (`gateway/app/calls/twilio.py`, same
+posture as the GoTrue client — no vendor SDK, injectable transport, offline tests)
+and terminates the call's **Media Stream** itself. Flow: `POST /api/calls/outbound`
+persists a `CallRecord`, registers an in-memory `CallBridge`, and creates the Twilio
+call with TwiML `<Connect><Stream url="wss://…/ws/twilio/{call_id}?secret=…">`;
+the browser joins the same bridge over the existing `/ws/voice` session with a new
+`join_call` control message (contract in agents/AGENTS.md). While joined, the
+session's *converted* output is transcoded (48kHz PCM → G.711 mu-law 8kHz,
+`app/calls/telephony.py`, pure stdlib — `audioop` is gone in 3.13+) and routed to
+the phone leg; the callee's audio comes back as binary frames. Call teardown is
+driven by Twilio's status callback (`POST /api/twilio/status`, X-Twilio-Signature
+validated) or an explicit `POST /api/calls/{id}/hangup`.
+
+What landed:
+
+- **DB**: `CallRecord` (`gateway/app/db/models.py`) + migration `a8f4c2d7e1b3`
+  (id doubles as the bridge/stream id; `voice_id` FK nullable; enums
+  `calldirection`/`callstatus` created `checkfirst` so a test-`create_all` dev DB
+  doesn't break the chain). Verified up/down/up.
+- **Routes** (`gateway/app/calls/routes.py`): outbound (E.164-validated, owned-voice
+  check, 503 when Twilio env or `PUBLIC_BASE_URL` unset — the rest of the app is
+  unaffected), history list/get (per-user), hangup (Twilio best-effort, record
+  closes regardless), status webhook (signature-gated, progress events ignored).
+- **Bridge** (`gateway/app/calls/bridge.py`): per-call bounded queues (drop-oldest,
+  ~2s), per-call random secret gating `/ws/twilio/{call_id}` (close 1008 otherwise),
+  None-sentinel close. Process-local — fine for the single-gateway deploy; a
+  multi-gateway topology needs Redis routing (M8b note).
+- **WS protocol**: `join_call`/`call_joined` messages; handler routes output via the
+  bridge only while it's open, reverts to echo when the call ends; anonymous
+  sessions can't join (`auth_required`), non-owners get `call_not_found`.
+- **Frontend**: `/dialer` page (login-gated: voice picker, E.164 input, call/hangup,
+  live meters, history), nav link, `engine.joinCall()` + worker `join_call` (re-sent
+  on reconnect so a drop mid-call re-joins the bridge).
+- **Tests** (all offline; 68 pass in `gateway/`): mu-law/resample codec unit tests,
+  call routes with mocked Twilio + real Postgres, webhook signature accept/reject,
+  media-stream secret gating, and a single-loop end-to-end bridge test (fake
+  WebSockets — two TestClient sockets each get their own event loop, which
+  deadlocks cross-loop queues; production runs one uvicorn loop).
+
+**Remaining for M8a sign-off (needs real credentials, ~15 min):** set
+`TWILIO_*` + `PUBLIC_BASE_URL` (ngrok/cloudflared tunnel to gateway :3001), place a
+real call from `/dialer`, confirm two-way audio and that the status callback closes
+the record. Latency note: the PSTN leg adds Twilio's own transport on top of the
+existing conversion budget; measure during the live run.
+
+### M8b — Inbound calls, recording, peer calls — PENDING
+
+Inbound (dedicated Twilio number → `CallDirection.INBOUND`), call recording
+(original + transformed, consent language per PRODUCT_SPEC §4.3), browser↔browser
+WebRTC calls, contacts. Also: Redis-backed bridge routing if the gateway ever runs
+more than one replica.

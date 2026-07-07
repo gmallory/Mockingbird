@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}Dialer — Mockingbird{% endblock %}
+
+{% block content %}
+<section class="dialer">
+  <header>
+    <h1>Dialer</h1>
+    <p class="subtitle">Call any phone number and speak in your cloned voice.
+      Pick a voice, dial, and talk — the callee hears the transformed audio.</p>
+  </header>
+
+  <div class="clone-form">
+    <input id="phone" class="input" type="tel" placeholder="+15551234567 (E.164)" />
+    <select id="voice-select" class="input">
+      <option value="">Untransformed (your real voice)</option>
+    </select>
+    <button id="call" class="btn" type="button">Call</button>
+    <button id="hangup" class="btn" type="button" disabled>Hang up</button>
+  </div>
+
+  <div class="controls">
+    <span id="call-status" class="badge badge--idle">idle</span>
+    <span id="call-time" class="rec-time"></span>
+  </div>
+
+  <div class="metric">
+    <span class="metric__label">Mic level</span>
+    <div class="meter"><div id="in-level" class="meter__fill"></div></div>
+  </div>
+  <div class="metric">
+    <span class="metric__label">Callee audio</span>
+    <div class="meter"><div id="out-level" class="meter__fill"></div></div>
+  </div>
+  <p id="status" class="status"></p>
+
+  <h2 class="section-title">Recent calls</h2>
+  <ul id="call-list" class="voice-list"><li class="muted">Loading…</li></ul>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { AudioEngine } from "/static/js/audio-engine/audio-engine.js";
+  import { requireAuth, authHeaders, getToken } from "/static/js/auth.js";
+
+  const GATEWAY = {{ public_gateway_url | tojson }};
+  const WS_URL = {{ public_ws_url | tojson }};
+  if (!requireAuth()) throw new Error("not authenticated");
+
+  const phoneInput = document.getElementById("phone");
+  const voiceSelect = document.getElementById("voice-select");
+  const callBtn = document.getElementById("call");
+  const hangupBtn = document.getElementById("hangup");
+  const callStatus = document.getElementById("call-status");
+  const callTime = document.getElementById("call-time");
+  const inLevel = document.getElementById("in-level");
+  const outLevel = document.getElementById("out-level");
+  const statusEl = document.getElementById("status");
+  const callList = document.getElementById("call-list");
+
+  const engine = new AudioEngine({ websocketUrl: WS_URL });
+  let activeCall = null;
+  let timer = null;
+  let startedAt = 0;
+
+  const setStatus = (msg) => { statusEl.textContent = msg; };
+  const setBadge = (text, ok) => {
+    callStatus.textContent = text;
+    callStatus.className = ok ? "badge badge--ok" : "badge badge--idle";
+  };
+
+  const escapeHtml = (s) =>
+    String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+    );
+
+  async function api(path, opts = {}) {
+    const resp = await fetch(`${GATEWAY}${path}`, { ...opts, headers: authHeaders(opts.headers || {}) });
+    if (resp.status === 401) { window.location.href = "/login"; throw new Error("unauthorized"); }
+    if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+    return resp.json();
+  }
+
+  async function loadVoices() {
+    try {
+      const voices = await api("/voices");
+      for (const v of voices) {
+        const opt = document.createElement("option");
+        // value = registry row id (what POST /api/calls/outbound wants);
+        // dataset.voiceId = streaming model id (what the audio path wants).
+        opt.value = v.id;
+        opt.dataset.voiceId = v.voice_id;
+        opt.textContent = `${v.label} (${v.language})`;
+        voiceSelect.append(opt);
+      }
+    } catch (err) {
+      setStatus("Could not load voices: " + (err?.message || err));
+    }
+  }
+
+  async function loadHistory() {
+    try {
+      const calls = await api("/api/calls");
+      if (!calls.length) {
+        callList.innerHTML = '<li class="muted">No calls yet.</li>';
+        return;
+      }
+      callList.innerHTML = calls
+        .map((c) => {
+          const when = new Date(c.started_at).toLocaleString();
+          const dur = c.duration_sec ? ` · ${Math.round(c.duration_sec)}s` : "";
+          return `<li><strong>${escapeHtml(c.phone_number)}</strong> ` +
+            `<span class="muted">${escapeHtml(c.status)} · ${escapeHtml(when)}${dur}</span></li>`;
+        })
+        .join("");
+    } catch (err) {
+      callList.innerHTML = `<li class="warn-note">Could not load history: ${escapeHtml(String(err))}</li>`;
+    }
+  }
+
+  async function placeCall() {
+    const phone = phoneInput.value.trim();
+    if (!/^\+[1-9]\d{1,14}$/.test(phone)) {
+      setStatus("Enter an E.164 number, e.g. +15551234567.");
+      return;
+    }
+    callBtn.disabled = true;
+    setBadge("dialing", true);
+    setStatus("Placing call…");
+    try {
+      // voiceSelect.value is the registry row id (Voice.id); POST /api/calls
+      // takes it as voice_id, and null -> untransformed call. The streaming model
+      // id is a different value (dataset.voiceId), read below for engine.start.
+      const selected = voiceSelect.value || null;
+      const call = await api("/api/calls/outbound", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone_number: phone, voice_id: selected }),
+      });
+      activeCall = call;
+      const modelId = voiceSelect.selectedOptions[0]?.dataset?.voiceId || null;
+      await engine.start(modelId, getToken());
+      engine.joinCall(call.id);
+    } catch (err) {
+      setBadge("idle", false);
+      setStatus("Call failed: " + (err?.message || err));
+      callBtn.disabled = false;
+      // The outbound leg may already be placed (the POST succeeded and the audio
+      // path failed after, e.g. mic denied). Tear down the half-started engine and
+      // hang the call up, or Twilio keeps dialing a call the UI can't control.
+      const placed = activeCall;
+      activeCall = null;
+      await engine.stop();
+      if (placed) {
+        try {
+          await api(`/api/calls/${placed.id}/hangup`, { method: "POST" });
+        } catch (e) {
+          setStatus("Call failed; could not hang up the placed call: " + (e?.message || e));
+        }
+      }
+    }
+  }
+
+  async function hangUp() {
+    hangupBtn.disabled = true;
+    try {
+      if (activeCall) await api(`/api/calls/${activeCall.id}/hangup`, { method: "POST" });
+    } catch (err) {
+      setStatus("Hangup error: " + (err?.message || err));
+    }
+    await endCallUi("Call ended.");
+  }
+
+  async function endCallUi(msg) {
+    clearInterval(timer);
+    callTime.textContent = "";
+    engine.leaveCall();
+    await engine.stop();
+    activeCall = null;
+    callBtn.disabled = false;
+    hangupBtn.disabled = true;
+    setBadge("idle", false);
+    setStatus(msg);
+    await loadHistory();
+  }
+
+  engine.on("callJoined", () => {
+    setBadge("in call", true);
+    setStatus("Connected — the callee hears your transformed voice.");
+    hangupBtn.disabled = false;
+    startedAt = performance.now();
+    timer = setInterval(() => {
+      callTime.textContent = ((performance.now() - startedAt) / 1000).toFixed(0) + "s";
+    }, 1000);
+  });
+  engine.on("level", ({ input, output }) => {
+    inLevel.style.width = Math.min(100, input * 140).toFixed(0) + "%";
+    outLevel.style.width = Math.min(100, output * 140).toFixed(0) + "%";
+  });
+  engine.on("error", (err) => setStatus("Error: " + (err?.message || err)));
+  engine.on("degraded", () => setStatus("Voice transform unavailable — call continues untransformed."));
+  engine.on("authError", async (msg) => endCallUi(msg + " Log in again to call."));
+  engine.on("limited", async (msg) => endCallUi(msg));
+  // Call ended server-side (callee hung up, or a Twilio terminal status). The
+  // gateway keeps the socket open and reverts to echo, so tear the UI down.
+  engine.on("callEnded", async () => {
+    if (activeCall) await endCallUi("Call ended.");
+  });
+
+  callBtn.addEventListener("click", placeCall);
+  hangupBtn.addEventListener("click", hangUp);
+  // No beforeunload hangup here: sendBeacon can't set the Authorization header the
+  // hangup endpoint requires, so it would 401. The gateway hangs up the PSTN leg
+  // when this session's WebSocket drops instead (voice_stream teardown).
+
+  loadVoices();
+  loadHistory();
+</script>
+{% endblock %}

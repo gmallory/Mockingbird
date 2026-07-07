@@ -41,6 +41,10 @@ from uuid import uuid4
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from app.calls import bridge as bridges
+from app.calls.bridge import CallBridge
+from app.calls.routes import hang_up_bridge
+from app.calls.telephony import pcm48_to_mulaw8
 from app.inference.client import InferenceSession, InferenceUnavailable
 from app.metrics import (
     WS_DEGRADED_TOTAL,
@@ -54,6 +58,8 @@ from app.metrics import (
 from app.rate_limit import RateLimiter
 from app.websocket.auth import WsAuth
 from app.websocket.protocol import (
+    CallEndedMessage,
+    CallJoinedMessage,
     DegradedMessage,
     ErrorMessage,
     ModelLoadedMessage,
@@ -70,9 +76,14 @@ WS_CLOSE_RATE_LIMITED = 4029
 @dataclass
 class _SessionState:
     authenticated: bool = False
+    user_id: str | None = None
     sample_rate: int = 48000
     model_id: str = ""
     degraded: bool = False
+    # Live-call media bridge (M8a). While set (and open), converted/passthrough
+    # output goes to the phone leg instead of back to the browser, and a
+    # concurrent task forwards the callee's audio to the browser.
+    bridge: CallBridge | None = None
 
 
 async def voice_stream(
@@ -116,10 +127,11 @@ async def voice_stream(
 
     mode = "authenticated" if auth.authenticated else "anonymous"
 
-    state = _SessionState(authenticated=auth.authenticated)
+    state = _SessionState(authenticated=auth.authenticated, user_id=auth.user_id)
     session = InferenceSession(grpc_url, timeout_s=timeout_s)
     out_lock = asyncio.Lock()
     reader_task: asyncio.Task | None = None
+    bridge_task: asyncio.Task | None = None
     first_in_at: float | None = None  # set on the session's first inbound audio frame
 
     async def send_json(payload: dict) -> None:
@@ -132,6 +144,49 @@ async def voice_stream(
         # Count only frames the socket actually accepted: a failed send (client
         # disconnect, close race) must not inflate the "frames out" counter.
         WS_FRAMES_OUT.inc()
+
+    async def emit_audio(data: bytes) -> None:
+        # Output routing: on a live call the user's (converted) voice goes to
+        # the phone leg, transcoded to the PSTN format; otherwise it echoes back
+        # to the browser as before. A closed bridge (call ended) reverts to echo.
+        bridge = state.bridge
+        if bridge is not None and not bridge.closed:
+            bridge.push_to_callee(pcm48_to_mulaw8(data))
+        else:
+            await send_bytes(data)
+
+    async def bridge_reader() -> None:
+        # Forwards the callee's audio (48k PCM frames off the bridge) to the
+        # browser. A None sentinel means the call ended (callee hung up, or a
+        # terminal Twilio status closed the bridge): tell the browser so it can
+        # tear its call UI down, then stop — emit_audio notices the closed bridge
+        # on its own and reverts to the echo loop.
+        bridge = state.bridge
+        if bridge is None:
+            return
+        while True:
+            frame = await bridge.to_browser.get()
+            if frame is None:
+                with contextlib.suppress(Exception):
+                    await send_json(CallEndedMessage(callId=bridge.call_id).model_dump())
+                return
+            await send_bytes(frame)
+
+    async def join_call(call_id: str) -> str | None:
+        # Attach to the call's media bridge; returns an error code or None.
+        nonlocal bridge_task
+        if not state.authenticated:
+            return "auth_required"
+        bridge = bridges.get(call_id)
+        if bridge is None or bridge.user_id != state.user_id:
+            # One code for "no such call" and "not yours": don't leak which
+            # call ids are live to other users.
+            return "call_not_found"
+        if state.bridge is not None:
+            return "already_in_call"
+        state.bridge = bridge
+        bridge_task = asyncio.create_task(bridge_reader())
+        return None
 
     async def degrade() -> None:
         # Idempotent: notify once, then audio is passed through unchanged. The
@@ -157,7 +212,7 @@ async def voice_stream(
                 if first_output_pending and first_in_at is not None:
                     WS_FIRST_OUTPUT_SECONDS.observe(time.monotonic() - first_in_at)
                     first_output_pending = False
-                await send_bytes(out)
+                await emit_audio(out)
         except InferenceUnavailable:
             pass
         except Exception:  # noqa: BLE001 - unexpected reader failure still degrades
@@ -185,7 +240,7 @@ async def voice_stream(
                 if first_in_at is None:
                     first_in_at = time.monotonic()
                 if state.degraded:
-                    await send_bytes(data_bytes)  # passthrough echo
+                    await emit_audio(data_bytes)  # passthrough
                     continue
                 if reader_task is None:
                     # Lazily dial inference and start the reader on the first frame.
@@ -193,7 +248,7 @@ async def voice_stream(
                         await session.open()
                     except InferenceUnavailable:
                         await degrade()
-                        await send_bytes(data_bytes)
+                        await emit_audio(data_bytes)
                         continue
                     reader_task = asyncio.create_task(reader())
                 try:
@@ -206,12 +261,12 @@ async def voice_stream(
                     reader_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await reader_task
-                    await send_bytes(data_bytes)
+                    await emit_audio(data_bytes)
                 continue
 
             text = message.get("text")
             if text is not None:
-                if await _handle_control(send_json, state, text):
+                if await _handle_control(send_json, state, text, join_call=join_call):
                     break  # stop requested
 
     except WebSocketDisconnect:
@@ -228,9 +283,21 @@ async def voice_stream(
             reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reader_task
+        if bridge_task is not None:
+            bridge_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await bridge_task
         await session.aclose()
         with contextlib.suppress(Exception):
             await websocket.close()
+        # If this session dropped while still joined to a live call (tab closed,
+        # network lost — there is no client reconnect), hang up the PSTN leg so
+        # the callee isn't left connected to audio no one is driving. A bridge
+        # already closed means the call ended server-side (user/callee hangup or
+        # status callback), so there is nothing to tear down.
+        if state.bridge is not None and not state.bridge.closed:
+            with contextlib.suppress(Exception):
+                await hang_up_bridge(state.bridge)
         # Release the concurrency slot and bank this session's duration. Both are
         # best-effort inside the limiter, so a Redis outage here never raises.
         if acquired and auth.user_id is not None:
@@ -238,7 +305,7 @@ async def voice_stream(
             await limiter.record_usage(auth.user_id, time.monotonic() - started_at)
 
 
-async def _handle_control(send_json, state: _SessionState, text: str) -> bool:
+async def _handle_control(send_json, state: _SessionState, text: str, join_call=None) -> bool:
     """Handle one JSON control message. Returns True if the session should stop."""
     try:
         msg = client_message_adapter.validate_json(text)
@@ -265,6 +332,13 @@ async def _handle_control(send_json, state: _SessionState, text: str) -> bool:
         # ack so the client knows the gateway will convert to it from now on.
         state.model_id = msg.modelId
         await send_json(ModelLoadedMessage(modelId=msg.modelId).model_dump())
+    elif msg.type == "join_call":
+        # Route this session's output onto a live call's media bridge (M8a).
+        error = await join_call(msg.callId) if join_call is not None else "call_not_found"
+        if error is not None:
+            await send_json(ErrorMessage(code=error, message="could not join call").model_dump())
+        else:
+            await send_json(CallJoinedMessage(callId=msg.callId).model_dump())
     elif msg.type == "stop":
         # The receive loop breaks on True; voice_stream's finally closes the
         # socket after the reader is cancelled, so the close is never raced.

@@ -65,12 +65,14 @@ Server → Client (binary): Int16 PCM transformed audio frames
 Client → Server (JSON):
   { "type": "start", "modelId": "<uuid>", "sampleRate": 48000 }
   { "type": "switch_model", "modelId": "<uuid>" }
+  { "type": "join_call", "callId": "<uuid>" }
   { "type": "stop" }
   { "type": "ping" }
 
 Server → Client (JSON):
   { "type": "ready", "latencyMs": 172 }
   { "type": "model_loaded", "modelId": "<uuid>" }
+  { "type": "call_joined", "callId": "<uuid>" }
   { "type": "error", "code": "<error_code>", "message": "<description>" }
   { "type": "degraded", "message": "<why transform is unavailable>" }
   { "type": "pong" }
@@ -78,6 +80,13 @@ Server → Client (JSON):
 
 `degraded` is sent when the inference hop is unavailable; the gateway falls back to
 passing the original audio straight back (the M1 echo behavior) so the session survives.
+
+`join_call` (M8a) attaches the session to a live outbound call's media bridge: `callId`
+is the record id from `POST /api/calls/outbound`, only the authenticated owner may join
+(errors: `auth_required`, `call_not_found`, `already_in_call`). While joined, the
+session's converted output is routed to the phone leg (Twilio Media Stream, mu-law
+8kHz) instead of echoed back, and the callee's audio arrives as the binary frames.
+When the call ends the bridge closes and the session reverts to the echo loop.
 
 ### Gateway ↔ Inference gRPC Protocol
 

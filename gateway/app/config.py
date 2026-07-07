@@ -58,6 +58,20 @@ class Settings(BaseSettings):
     # requires it so a token minted for a different audience is rejected.
     supabase_jwt_audience: str = "authenticated"
 
+    # === Calling (M8a) — outbound PSTN via Twilio ===
+    # The gateway drives Twilio's REST API directly (thin httpx wrapper, same
+    # posture as the GoTrue client) and terminates the call's Media Stream on
+    # /ws/twilio/{call_id}. All four must be set for POST /api/calls/outbound to
+    # work; otherwise it returns 503 and the rest of the app is unaffected.
+    twilio_account_sid: str = ""  # env TWILIO_ACCOUNT_SID
+    twilio_auth_token: str = ""  # env TWILIO_AUTH_TOKEN
+    twilio_phone_number: str = ""  # env TWILIO_PHONE_NUMBER (E.164 caller id)
+    # Base URL Twilio can reach *from the internet* for the status callback and
+    # the media-stream WebSocket (an ngrok/cloudflared tunnel in dev, e.g.
+    # https://abc.ngrok.app). http(s) scheme; the stream URL is derived as ws(s).
+    public_base_url: str = ""  # env PUBLIC_BASE_URL
+    enable_calling: bool = True  # env ENABLE_CALLING (feature flag)
+
     # === Realtime socket auth (M6b) ===
     # /ws/voice takes its token from a ?token=<jwt> query param. Auth is optional
     # by default so the anonymous echo demo keeps working (no token -> echo-only,
