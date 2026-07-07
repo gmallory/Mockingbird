@@ -14,10 +14,12 @@ tested offline; the live-Twilio run remains.
 
 **Do not trust this paragraph to stay current.** The canonical milestone tracker — current state,
 per-milestone detail, and the concrete next steps (the rented-GPU `cloud_gpu` bench run closing M5;
-the live-Twilio M8a run; then M8b) — is **[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus the
-relevant `agents/*.agent.md` before picking up work. `docs/PRODUCT_SPEC.md` remains the detailed spec
-(data models, API design, latency budgets). Still verify a directory/command/file exists before
-assuming it — later roadmap items (M8b) are not built yet.
+the live-Twilio M8a run; then M9 HD Clone and M10 UI/sign-off — M8b was descoped 2026-07-07) — is
+**[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus the relevant `agents/*.agent.md` before picking
+up work. `docs/PRODUCT_SPEC.md` remains the detailed spec (data models, API design, latency budgets);
+its **§15 is the binding v1 success criteria** (demo-ready portfolio piece, owner decision 2026-07-07).
+Still verify a directory/command/file exists before assuming it — later roadmap items (M9, M10) are
+not built yet.
 
 ## What this project is
 
