@@ -1,4 +1,4 @@
-# 🐦 Mockingbird
+# 🐦‍⬛ Mockingbird
 
 > **Real-time AI voice cloning for live conversations.**
 
@@ -13,7 +13,7 @@ Mockingbird is a web application that captures your speech, transforms it into a
 - **Hybrid inference** — On-device preprocessing + edge GPU server inference
 - **Streaming architecture** — AudioWorklet → WebSocket → GPU → WebSocket → AudioWorklet
 
-### 🧬 User-Trainable Voice Models
+### 🗣️ User-Trainable Voice Models
 - **Instant Clone** — Upload 10–30 seconds of audio, get a working voice clone immediately (OpenVoice / GPT-SoVITS)
 - **HD Clone** — Upload 10–30 minutes of audio for studio-quality voice cloning (RVC fine-tuning)
 - **Voice Library** — Save, manage, and hot-swap between multiple voice models
@@ -36,17 +36,17 @@ Mockingbird is a web application that captures your speech, transforms it into a
 
 ```
 ┌──────────────────────────────────────────────────┐
-│              BROWSER (Client)                     │
-│                                                   │
+│              BROWSER (Client)                    │
+│                                                  │
 │  FastAPI UI ◄──► Audio Engine ◄──► WS Worker     │
-│                  (AudioWorklet)     (Binary PCM)  │
-│                  + Ring Buffer      + Opus        │
-│                  + VAD              + Reconnect   │
+│                  (AudioWorklet)     (Binary PCM) │
+│                  + Ring Buffer      + Opus       │
+│                  + VAD              + Reconnect  │
 └──────────────────────┬───────────────────────────┘
                        │ wss:// (binary frames)
 ┌──────────────────────▼───────────────────────────┐
-│              EDGE GPU SERVER                      │
-│                                                   │
+│              EDGE GPU SERVER                     │
+│                                                  │
 │  FastAPI Gateway ─gRPC──► FastAPI ML Service     │
 │  (WebSocket mgmt,          (RVC / OpenVoice,     │
 │   auth, routing)            ONNX Runtime GPU,    │
