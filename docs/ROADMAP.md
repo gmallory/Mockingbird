@@ -26,7 +26,7 @@ Before starting a milestone, read this file plus the relevant `agents/*.agent.md
 | **M6** | **Auth (Supabase) + multi-user voice library** | **done** |
 | → M6a | Supabase token verification + `/auth` proxy + per-user `/voices` + login UI | done |
 | → M6b | Auth on the `/ws/voice` socket + per-user rate limiting | done |
-| M7 | Infra / CI hardening (CI, Grafana; Dockerfiles/compose landed in #14) | pending |
+| **M7** | **Infra / CI hardening (GitHub Actions CI + Prometheus/Grafana)** | **done** |
 | M8 | Calling — Twilio WebRTC↔PSTN (PRODUCT_SPEC Phase 2) | pending |
 
 ## Backend priority (owner decision, 2026-07-04)
@@ -376,11 +376,53 @@ no token yields the echo-only demo (unless `WS_REQUIRE_AUTH=true` → 4001); an 
 token → 4001; over a plan's concurrency cap or monthly minutes → 4029; the browser
 stops retrying on those; a Redis outage degrades to unenforced rather than dropping.
 
-### M7 — Infra / CI hardening
+### M7 — Infra / CI hardening — DONE
 
-GitHub Actions (`ruff` + `pytest` per service), Prometheus + Grafana latency dashboard.
-Dockerfiles for all three services, extended `infrastructure/docker-compose.yml`, and
-`scripts/dev.sh` already landed in #14 — remaining scope is CI + observability.
+Scope was CI + observability (Dockerfiles, extended compose, and `scripts/dev.sh` had
+already landed in #14). What landed:
+
+- **CI** (`.github/workflows/ci.yml`): one matrix job per service (frontend, gateway,
+  inference) running `uv sync --locked` → `ruff format --check` → `ruff check` →
+  `pytest`, plus a `docker compose build` job for the three images. Postgres 16 +
+  Redis 7 service containers mirror the compose stack's credentials, so the gateway
+  tests that skip locally when infra is down (DB, rate limiter, WS end-to-end) run
+  for real in CI, and `alembic upgrade head` verifies the migration chain before the
+  gateway's tests. Ruff was added to the gateway/frontend dev groups (inference
+  already had it); `inference/.python-version` now pins 3.14 like the other two.
+- **Gateway metrics** (`gateway/app/metrics.py`, served at `GET /metrics` via
+  `prometheus-client`): session outcomes (accepted / rejected 4001 / rate_limited
+  4029), active-session gauge by mode, session-duration histogram, audio-frame
+  counters (in/out), degraded-session counter, and a **first-output latency
+  histogram** — first inbound audio frame to first *converted* frame back (covers
+  the lazy gRPC dial + block fill + inference; buckets bracket the 172ms budget).
+- **Inference metrics** (`inference/app/metrics.py`, `GET /metrics` on the health
+  app): active Convert-stream gauge, frame counters, and a **conversion-latency
+  histogram** observed only for push/flush calls that emitted audio — one sample
+  per converted block (self_hosted) or utterance (cartesia), labelled by backend
+  class; buckets bracket the 80ms GPU-inference line. Instrumented in
+  `app/server.py` so every backend is covered without touching them.
+- **Compose observability** (`infrastructure/docker-compose.yml` +
+  `infrastructure/monitoring/`): `prometheus` (v3.1, 5s scrape of gateway:3001 +
+  inference:8001) and `grafana` (11.4, anonymous-admin dev config, host port 3002)
+  with a provisioned datasource and a **latency dashboard**
+  (`monitoring/grafana/dashboards/latency.json`, uid `mockingbird-latency`):
+  conversion-latency quantiles with the 80ms threshold line, first-output latency
+  with the 172ms line, frame throughput, active sessions/streams, session outcomes
+  + degradations, session duration. Both services are optional — the app stack
+  runs unchanged without them.
+- **Tests**: `gateway/tests/test_metrics.py` (exposition endpoint + WS counters via
+  a real degraded session) and `inference/tests/test_metrics.py` (endpoint + Convert
+  stream instrumentation through the passthrough backend).
+
+Out of scope, unchanged: K8s manifests, Terraform, Sentry, alerting rules, and the
+CD/deploy pipeline from `agents/infrastructure.agent.md` — none are needed until
+there's a real deployment target (the rented-GPU bench box is provisioned by script,
+not K8s).
+
+**Done when (met):** CI runs lint + format + tests for all three services and builds
+the compose images on every PR; `docker compose -f infrastructure/docker-compose.yml
+up` serves a Grafana latency dashboard at `http://localhost:3002/d/mockingbird-latency`
+fed by Prometheus scraping both services' `/metrics`.
 
 ### M8 — Calling (PRODUCT_SPEC Phase 2)
 

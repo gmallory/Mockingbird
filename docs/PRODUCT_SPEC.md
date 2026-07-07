@@ -710,7 +710,8 @@ utterance-segmented (walkie-talkie), with measured felt latency ~2s+ (§4.1).
 - [ ] HD Clone training pipeline (RVC fine-tuning)
 - [ ] Mid-call model switching
 - [ ] Call recording (original + transformed)
-- [ ] Latency monitoring dashboard (Prometheus + Grafana)
+- [x] Latency monitoring dashboard (Prometheus + Grafana) — landed early in M7
+      (compose `prometheus`+`grafana`, `/metrics` on gateway + inference)
 
 ### Phase 3 — Scale & Polish (Weeks 15–20)
 - [ ] Multi-region edge deployment (Fly.io / CloudFlare)

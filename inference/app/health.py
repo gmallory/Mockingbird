@@ -9,7 +9,8 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.backends import get_backend
 from app.config import settings
@@ -39,6 +40,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Mockingbird Inference", version="0.1.0", lifespan=lifespan)
 app.include_router(voices_router)
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    # Prometheus scrape target (M7); see app/metrics.py for the metric set.
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/healthz")

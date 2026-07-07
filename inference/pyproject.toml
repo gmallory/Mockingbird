@@ -14,6 +14,7 @@ dependencies = [
     # tgt_se initializer inside the exported converter template (M5b).
     "onnx>=1.22.0",
     "onnxruntime>=1.27.0",
+    "prometheus-client>=0.25.0",
     "pydantic-settings>=2.14.2",
     "python-multipart>=0.0.32",
     "structlog>=26.1.0",

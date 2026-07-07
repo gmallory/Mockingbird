@@ -1,0 +1,14 @@
+# Prometheus scrape config for the local compose stack (M7).
+# Targets are compose service names; both services expose GET /metrics.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: ["gateway:3001"]
+
+  - job_name: inference
+    static_configs:
+      - targets: ["inference:8001"]

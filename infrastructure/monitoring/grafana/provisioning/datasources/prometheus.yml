@@ -1,0 +1,11 @@
+# Auto-provisioned Prometheus datasource for the compose stack (M7).
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: mockingbird-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
