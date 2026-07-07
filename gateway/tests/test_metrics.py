@@ -6,26 +6,16 @@ move the same counters. Reads go through the public ``REGISTRY.get_sample_value`
 API rather than child internals.
 """
 
-import socket
-
 import pytest
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
 
-from app.config import settings
+from app.inference.client import InferenceSession, InferenceUnavailable
 from app.main import app
 
 
 def _sample(name: str, **labels) -> float:
     return REGISTRY.get_sample_value(name, labels or None) or 0.0
-
-
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("localhost", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
 
 
 def test_metrics_endpoint_serves_prometheus_exposition():
@@ -39,10 +29,14 @@ def test_metrics_endpoint_serves_prometheus_exposition():
 
 
 def test_ws_session_counts_frames_and_outcomes(monkeypatch: pytest.MonkeyPatch):
-    # Point at a dead port so the degrade path is deterministic — a dev
-    # inference service that happens to be running must not buffer the frame
-    # (and hang the receive below) or convert it.
-    monkeypatch.setattr(settings, "inference_grpc_url", f"localhost:{_free_port()}")
+    # Force the degrade path deterministically: opening the inference stream
+    # raises, so the session falls back to passthrough without a real dial. This
+    # avoids the 2s channel_ready timeout and the race of a "free" port being
+    # claimed before the gRPC connect.
+    async def _fail_open(self: InferenceSession) -> None:
+        raise InferenceUnavailable("test: inference down")
+
+    monkeypatch.setattr(InferenceSession, "open", _fail_open)
 
     client = TestClient(app)
     accepted_before = _sample("mockingbird_gateway_ws_sessions_total", outcome="accepted")

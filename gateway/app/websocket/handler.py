@@ -127,9 +127,11 @@ async def voice_stream(
             await websocket.send_json(payload)
 
     async def send_bytes(data: bytes) -> None:
-        WS_FRAMES_OUT.inc()
         async with out_lock:
             await websocket.send_bytes(data)
+        # Count only frames the socket actually accepted: a failed send (client
+        # disconnect, close race) must not inflate the "frames out" counter.
+        WS_FRAMES_OUT.inc()
 
     async def degrade() -> None:
         # Idempotent: notify once, then audio is passed through unchanged. The
