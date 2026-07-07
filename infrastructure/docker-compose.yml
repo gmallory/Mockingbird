@@ -97,6 +97,39 @@ services:
       gateway:
         condition: service_started
 
+  # --- Observability (M7): Prometheus scrape + Grafana latency dashboard ----
+  # Optional for the app itself — the stack runs fine if these two are stopped.
+  # Grafana: http://localhost:3002/d/mockingbird-latency (anonymous admin, dev only).
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      gateway:
+        condition: service_started
+      inference:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    # Dev-only: anonymous admin, no login wall. Do not ship this config.
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    # Frontend owns host port 3000; Grafana maps to 3002.
+    ports:
+      - "3002:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+
 volumes:
   postgres_data:
   redis_data:

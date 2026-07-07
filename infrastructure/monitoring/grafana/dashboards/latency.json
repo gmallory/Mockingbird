@@ -1,0 +1,168 @@
+{
+  "uid": "mockingbird-latency",
+  "title": "Mockingbird — Latency",
+  "description": "Streaming-path latency against the ~172ms end-to-end budget (PRODUCT_SPEC §4): conversion time per block/utterance, first-output startup latency, throughput, and session health.",
+  "tags": ["mockingbird", "latency"],
+  "schemaVersion": 39,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Inference conversion latency (per block / utterance)",
+      "description": "Wall time of a push/flush that emitted converted audio. The 80ms line is the GPU-inference share of the end-to-end budget.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "mockingbird-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "thresholdsStyle": { "mode": "line" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.08 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(mockingbird_inference_convert_seconds_bucket[1m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mockingbird_inference_convert_seconds_bucket[1m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(mockingbird_inference_convert_seconds_bucket[1m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Gateway first converted output (startup latency)",
+      "description": "First inbound audio frame to first converted frame back — includes the lazy gRPC dial, block fill, and inference. The 172ms line is the full end-to-end budget.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "mockingbird-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "thresholdsStyle": { "mode": "line" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.172 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(mockingbird_gateway_ws_first_output_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mockingbird_gateway_ws_first_output_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Audio frame throughput",
+      "description": "20ms frames per second through the gateway WebSocket and the inference gRPC stream (1 live session ≈ 50 frames/s each way).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "mockingbird-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (direction) (rate(mockingbird_gateway_ws_audio_frames_total[1m]))",
+          "legendFormat": "gateway {{direction}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (direction) (rate(mockingbird_inference_frames_total[1m]))",
+          "legendFormat": "inference {{direction}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Active sessions / streams",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "mockingbird-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (mode) (mockingbird_gateway_ws_sessions_active)",
+          "legendFormat": "ws {{mode}}"
+        },
+        {
+          "refId": "B",
+          "expr": "mockingbird_inference_active_streams",
+          "legendFormat": "grpc streams"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Session outcomes & degradations",
+      "description": "Gate outcomes (accepted / rejected 4001 / rate_limited 4029) and sessions that fell back to passthrough echo because inference was unreachable.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "mockingbird-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(mockingbird_gateway_ws_sessions_total[5m]))",
+          "legendFormat": "{{outcome}}"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(mockingbird_gateway_ws_degraded_sessions_total[5m])",
+          "legendFormat": "degraded"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Session duration",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "mockingbird-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(mockingbird_gateway_ws_session_seconds_bucket[10m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mockingbird_gateway_ws_session_seconds_bucket[10m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    }
+  ]
+}

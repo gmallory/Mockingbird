@@ -42,6 +42,14 @@ from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from app.inference.client import InferenceSession, InferenceUnavailable
+from app.metrics import (
+    WS_DEGRADED_TOTAL,
+    WS_FIRST_OUTPUT_SECONDS,
+    WS_FRAMES_TOTAL,
+    WS_SESSION_SECONDS,
+    WS_SESSIONS_ACTIVE,
+    WS_SESSIONS_TOTAL,
+)
 from app.rate_limit import RateLimiter
 from app.websocket.auth import WsAuth
 from app.websocket.protocol import (
@@ -84,6 +92,7 @@ async def voice_stream(
 
     # --- Auth + rate-limit gate (before any frame is processed) -------------
     if auth.outcome == "rejected":
+        WS_SESSIONS_TOTAL.labels(outcome="rejected").inc()
         with contextlib.suppress(Exception):
             await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason=auth.reason)
         return
@@ -97,22 +106,30 @@ async def voice_stream(
     if auth.authenticated and auth.user_id is not None:
         result = await limiter.acquire(auth.user_id, auth.plan, session_id)
         if not result.ok:
+            WS_SESSIONS_TOTAL.labels(outcome="rate_limited").inc()
             with contextlib.suppress(Exception):
                 await websocket.close(code=WS_CLOSE_RATE_LIMITED, reason=result.reason)
             return
         acquired = True
         started_at = time.monotonic()
 
+    mode = "authenticated" if auth.authenticated else "anonymous"
+    WS_SESSIONS_TOTAL.labels(outcome="accepted").inc()
+    WS_SESSIONS_ACTIVE.labels(mode=mode).inc()
+    session_opened_at = time.monotonic()
+
     state = _SessionState(authenticated=auth.authenticated)
     session = InferenceSession(grpc_url, timeout_s=timeout_s)
     out_lock = asyncio.Lock()
     reader_task: asyncio.Task | None = None
+    first_in_at: float | None = None  # set on the session's first inbound audio frame
 
     async def send_json(payload: dict) -> None:
         async with out_lock:
             await websocket.send_json(payload)
 
     async def send_bytes(data: bytes) -> None:
+        WS_FRAMES_TOTAL.labels(direction="out").inc()
         async with out_lock:
             await websocket.send_bytes(data)
 
@@ -123,6 +140,7 @@ async def voice_stream(
         if state.degraded:
             return
         state.degraded = True
+        WS_DEGRADED_TOTAL.inc()
         with contextlib.suppress(Exception):
             await send_json(DegradedMessage().model_dump())
 
@@ -133,8 +151,12 @@ async def voice_stream(
         # as much as a failure — so fall back to passthrough. CancelledError is a
         # BaseException, so teardown cancellation propagates past these handlers
         # and skips the degrade below.
+        first_output_pending = True
         try:
             async for out in session.outputs():
+                if first_output_pending and first_in_at is not None:
+                    WS_FIRST_OUTPUT_SECONDS.observe(time.monotonic() - first_in_at)
+                    first_output_pending = False
                 await send_bytes(out)
         except InferenceUnavailable:
             pass
@@ -154,6 +176,9 @@ async def voice_stream(
 
             data_bytes = message.get("bytes")
             if data_bytes is not None:
+                WS_FRAMES_TOTAL.labels(direction="in").inc()
+                if first_in_at is None:
+                    first_in_at = time.monotonic()
                 if state.degraded:
                     await send_bytes(data_bytes)  # passthrough echo
                     continue
@@ -196,6 +221,8 @@ async def voice_stream(
         await session.aclose()
         with contextlib.suppress(Exception):
             await websocket.close()
+        WS_SESSIONS_ACTIVE.labels(mode=mode).dec()
+        WS_SESSION_SECONDS.observe(time.monotonic() - session_opened_at)
         # Release the concurrency slot and bank this session's duration. Both are
         # best-effort inside the limiter, so a Redis outage here never raises.
         if acquired and auth.user_id is not None:

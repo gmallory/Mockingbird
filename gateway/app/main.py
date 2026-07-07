@@ -13,7 +13,8 @@ import redis.asyncio as aioredis
 import structlog
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 
 from app.auth import router as auth_router
@@ -90,6 +91,14 @@ async def healthz() -> JSONResponse:
         "redis": "ok" if redis_ok else "down",
     }
     return JSONResponse(body, status_code=200 if healthy else 503)
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    # Prometheus scrape target (M7). Served unauthenticated: in the compose /
+    # k8s topology only Prometheus reaches this port path, and the exposition
+    # carries counters, not user data.
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.websocket("/ws/voice")

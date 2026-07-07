@@ -1,0 +1,11 @@
+# Auto-load dashboard JSON baked into the Grafana container (M7).
+apiVersion: 1
+
+providers:
+  - name: mockingbird
+    folder: Mockingbird
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

@@ -1,0 +1,82 @@
+# CI (M7): lint + format + tests per service, then a compose build check.
+#
+# Postgres/Redis service containers mirror infrastructure/docker-compose.yml
+# (same db/user/password), so the gateway tests that skip locally when infra is
+# down run for real here — including the Alembic migration chain.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [frontend, gateway, inference]
+    defaults:
+      run:
+        working-directory: ${{ matrix.service }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mockingbird
+          POSTGRES_USER: mockingbird
+          POSTGRES_PASSWORD: dev_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mockingbird"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ matrix.service }}/uv.lock
+
+      - name: Sync dependencies (locked)
+        run: uv sync --locked
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Apply migrations (gateway)
+        if: matrix.service == 'gateway'
+        run: uv run alembic upgrade head
+
+      - name: Pytest
+        run: uv run pytest
+
+  docker-build:
+    name: compose build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build all service images
+        run: docker compose -f infrastructure/docker-compose.yml build
