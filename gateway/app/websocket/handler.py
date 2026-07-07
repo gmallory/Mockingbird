@@ -43,6 +43,7 @@ from pydantic import ValidationError
 
 from app.calls import bridge as bridges
 from app.calls.bridge import CallBridge
+from app.calls.routes import hang_up_bridge
 from app.calls.telephony import pcm48_to_mulaw8
 from app.inference.client import InferenceSession, InferenceUnavailable
 from app.metrics import (
@@ -57,6 +58,7 @@ from app.metrics import (
 from app.rate_limit import RateLimiter
 from app.websocket.auth import WsAuth
 from app.websocket.protocol import (
+    CallEndedMessage,
     CallJoinedMessage,
     DegradedMessage,
     ErrorMessage,
@@ -155,14 +157,18 @@ async def voice_stream(
 
     async def bridge_reader() -> None:
         # Forwards the callee's audio (48k PCM frames off the bridge) to the
-        # browser. A None sentinel means the call ended; just stop — emit_audio
-        # notices the closed bridge on its own.
+        # browser. A None sentinel means the call ended (callee hung up, or a
+        # terminal Twilio status closed the bridge): tell the browser so it can
+        # tear its call UI down, then stop — emit_audio notices the closed bridge
+        # on its own and reverts to the echo loop.
         bridge = state.bridge
         if bridge is None:
             return
         while True:
             frame = await bridge.to_browser.get()
             if frame is None:
+                with contextlib.suppress(Exception):
+                    await send_json(CallEndedMessage(callId=bridge.call_id).model_dump())
                 return
             await send_bytes(frame)
 
@@ -284,6 +290,14 @@ async def voice_stream(
         await session.aclose()
         with contextlib.suppress(Exception):
             await websocket.close()
+        # If this session dropped while still joined to a live call (tab closed,
+        # network lost — there is no client reconnect), hang up the PSTN leg so
+        # the callee isn't left connected to audio no one is driving. A bridge
+        # already closed means the call ended server-side (user/callee hangup or
+        # status callback), so there is nothing to tear down.
+        if state.bridge is not None and not state.bridge.closed:
+            with contextlib.suppress(Exception):
+                await hang_up_bridge(state.bridge)
         # Release the concurrency slot and bank this session's duration. Both are
         # best-effort inside the limiter, so a Redis outage here never raises.
         if acquired and auth.user_id is not None:

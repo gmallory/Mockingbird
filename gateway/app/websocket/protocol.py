@@ -83,6 +83,16 @@ class CallJoinedMessage(BaseModel):
     callId: str  # noqa: N815
 
 
+class CallEndedMessage(BaseModel):
+    """The live call this session joined has ended (callee hung up, or Twilio
+    reported a terminal status). The browser tears its call UI down; the session
+    itself stays open and reverts to the plain echo loop.
+    """
+
+    type: Literal["call_ended"] = "call_ended"
+    callId: str  # noqa: N815
+
+
 class DegradedMessage(BaseModel):
     """Inference hop is unavailable; the gateway is passing audio through unchanged.
 

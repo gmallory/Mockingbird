@@ -36,6 +36,9 @@ class CallBridge:
     call_id: str
     user_id: str  # owner (Supabase sub, as carried by WsAuth) — only they may join
     secret: str
+    # Twilio's CallSid, stashed once the call is placed. Lets the browser session's
+    # teardown hang up the PSTN leg without a DB read when the tab closes mid-call.
+    twilio_call_sid: str | None = None
     to_callee: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(_QUEUE_MAX))
     to_browser: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(_QUEUE_MAX))
     closed: bool = False

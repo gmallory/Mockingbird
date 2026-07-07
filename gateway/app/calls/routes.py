@@ -121,6 +121,7 @@ async def outbound_call(
         raise HTTPException(status_code=502, detail=f"twilio call failed: {exc}") from exc
 
     record.twilio_call_sid = result.get("sid")
+    bridge.twilio_call_sid = record.twilio_call_sid
     await session.commit()
     await session.refresh(record)
     return record
@@ -182,6 +183,31 @@ async def hangup_call(
         await session.commit()
         await session.refresh(record)
     return record
+
+
+async def hang_up_bridge(call_bridge: bridges.CallBridge) -> None:
+    """End a call because its browser session dropped (tab closed / WS lost).
+
+    Best-effort: close the bridge (stops buffering, wakes both media drainers)
+    and tell Twilio to end the PSTN leg so the callee isn't left connected to a
+    session no one is driving. The record is closed by the status callback Twilio
+    fires when the leg actually ends (the authoritative signal), so this path
+    needs no DB access — which is why the ``/ws/voice`` teardown can call it.
+    """
+    bridges.close(call_bridge.call_id)
+    if call_bridge.twilio_call_sid and settings.twilio_auth_token:
+        try:
+            await twilio.complete_call(
+                call_bridge.twilio_call_sid,
+                account_sid=settings.twilio_account_sid,
+                auth_token=settings.twilio_auth_token,
+            )
+        except twilio.TwilioError as exc:
+            log.warning(
+                "calls.session_drop_hangup_failed",
+                call_id=call_bridge.call_id,
+                error=str(exc),
+            )
 
 
 def _finish(record: CallRecord, status: CallStatus, duration: float | None = None) -> None:

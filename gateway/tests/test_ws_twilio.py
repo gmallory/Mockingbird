@@ -222,6 +222,10 @@ async def test_call_bridge_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
             await asyncio.wait_for(twilio_task, timeout=5)
             assert bridge.closed
 
+            # The gateway tells the browser the call ended (so the dialer can tear
+            # its UI down) before the socket reverts to echo.
+            assert await browser.expect("json") == {"type": "call_ended", "callId": call_id}
+
             deadline = time.monotonic() + 5
             while True:
                 browser.send_client_bytes(_frame_20ms(3000))
@@ -236,4 +240,51 @@ async def test_call_bridge_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
             for task in (browser_task, twilio_task):
                 if not task.done():
                     task.cancel()
+            bridges.close(call_id)
+
+
+async def test_browser_drop_hangs_up_live_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The browser tab closes mid-call while the bridge is still open. The beacon
+    # the dialer used to fire can't authenticate, so teardown must hang up the
+    # PSTN leg itself: tell Twilio to end the call and close the bridge. DB-free
+    # (the sid rides the bridge), so no Postgres is needed here.
+    from app.calls import twilio
+
+    monkeypatch.setattr(settings, "twilio_account_sid", "AC" + "0" * 32)
+    monkeypatch.setattr(settings, "twilio_auth_token", "twilio-auth-token")
+    completed: dict = {}
+
+    async def _fake_complete(call_sid, **kwargs):
+        completed["sid"] = call_sid
+        return {"sid": call_sid, "status": "completed"}
+
+    monkeypatch.setattr(twilio, "complete_call", _fake_complete)
+
+    owner_id = str(uuid4())
+    call_id = uuid4().hex
+    bridge = bridges.create(call_id, user_id=owner_id)
+    bridge.twilio_call_sid = "CA" + "7" * 32
+
+    with _passthrough_inference() as addr:
+        browser = _FakeWS()
+        auth = WsAuth(outcome="authenticated", user_id=owner_id)
+        browser_task = asyncio.create_task(
+            voice_stream(browser, addr, auth=auth, limiter=RateLimiter(None))
+        )
+        try:
+            assert (await browser.expect("json"))["type"] == "ready"
+            browser.send_client_json({"type": "start", "sampleRate": 48000})
+            assert (await browser.expect("json"))["type"] == "ready"
+            browser.send_client_json({"type": "join_call", "callId": call_id})
+            assert await browser.expect("json") == {"type": "call_joined", "callId": call_id}
+
+            browser.disconnect()
+            await asyncio.wait_for(browser_task, timeout=5)
+
+            # Twilio was asked to end the leg, and the bridge is torn down.
+            assert completed["sid"] == "CA" + "7" * 32
+            assert bridge.closed
+        finally:
+            if not browser_task.done():
+                browser_task.cancel()
             bridges.close(call_id)

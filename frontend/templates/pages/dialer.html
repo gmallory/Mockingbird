@@ -128,8 +128,9 @@
     setBadge("dialing", true);
     setStatus("Placing call…");
     try {
-      // The registry row id rides the streaming path as the model id; the same
-      // selection the Live Monitor uses. voice_id null -> untransformed call.
+      // voiceSelect.value is the registry row id (Voice.id); POST /api/calls
+      // takes it as voice_id, and null -> untransformed call. The streaming model
+      // id is a different value (dataset.voiceId), read below for engine.start.
       const selected = voiceSelect.value || null;
       const call = await api("/api/calls/outbound", {
         method: "POST",
@@ -144,7 +145,19 @@
       setBadge("idle", false);
       setStatus("Call failed: " + (err?.message || err));
       callBtn.disabled = false;
+      // The outbound leg may already be placed (the POST succeeded and the audio
+      // path failed after, e.g. mic denied). Tear down the half-started engine and
+      // hang the call up, or Twilio keeps dialing a call the UI can't control.
+      const placed = activeCall;
       activeCall = null;
+      await engine.stop();
+      if (placed) {
+        try {
+          await api(`/api/calls/${placed.id}/hangup`, { method: "POST" });
+        } catch (e) {
+          setStatus("Call failed; could not hang up the placed call: " + (e?.message || e));
+        }
+      }
     }
   }
 
@@ -188,15 +201,17 @@
   engine.on("degraded", () => setStatus("Voice transform unavailable — call continues untransformed."));
   engine.on("authError", async (msg) => endCallUi(msg + " Log in again to call."));
   engine.on("limited", async (msg) => endCallUi(msg));
+  // Call ended server-side (callee hung up, or a Twilio terminal status). The
+  // gateway keeps the socket open and reverts to echo, so tear the UI down.
+  engine.on("callEnded", async () => {
+    if (activeCall) await endCallUi("Call ended.");
+  });
 
   callBtn.addEventListener("click", placeCall);
   hangupBtn.addEventListener("click", hangUp);
-  window.addEventListener("beforeunload", () => {
-    // Best-effort: closing the tab should not leave the PSTN leg ringing.
-    if (activeCall) {
-      navigator.sendBeacon?.(`${GATEWAY}/api/calls/${activeCall.id}/hangup`);
-    }
-  });
+  // No beforeunload hangup here: sendBeacon can't set the Authorization header the
+  // hangup endpoint requires, so it would 401. The gateway hangs up the PSTN leg
+  // when this session's WebSocket drops instead (voice_stream teardown).
 
   loadVoices();
   loadHistory();

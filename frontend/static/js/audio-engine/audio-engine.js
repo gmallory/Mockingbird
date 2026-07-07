@@ -282,7 +282,8 @@ export class AudioEngine {
         break;
       }
       case "control": {
-        // ready / pong / model_loaded / degraded / error / unauthorized / rate_limited.
+        // ready / pong / model_loaded / degraded / error / unauthorized /
+        // rate_limited / call_joined / call_ended.
         const ctrl = data.data;
         if (ctrl?.type === "error") this._emit("error", ctrl.message);
         else if (ctrl?.type === "degraded") this._emit("degraded", ctrl.message);
@@ -292,6 +293,9 @@ export class AudioEngine {
         else if (ctrl?.type === "rate_limited")
           this._emit("limited", ctrl.message || "connection limit reached");
         else if (ctrl?.type === "call_joined") this._emit("callJoined", ctrl.callId);
+        // Call ended server-side (callee hung up / Twilio terminal status): the
+        // session stays open and reverts to echo, so the UI must tear itself down.
+        else if (ctrl?.type === "call_ended") this._emit("callEnded", ctrl.callId);
         break;
       }
     }
