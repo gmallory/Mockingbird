@@ -4,40 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Mockingbird is **under active implementation** (no longer pre-implementation). The three Python services
-exist and have test suites: `frontend/`, `gateway/`, and `inference/` (plus `infrastructure/`, `proto/`).
-Milestones **M1–M4** are done (M4a/b/c all landed), plus **M5a/M5b** and **M6a/M6b**:
+Mockingbird is under active implementation. The three Python services exist and have test suites:
+`frontend/`, `gateway/`, and `inference/` (plus `infrastructure/`, `proto/`). Milestones **M1–M6 are
+done**: echo slice, Postgres/Redis, gRPC proxy + swappable backends, Cartesia conversion + cloning +
+Studio UI, self-hosted OpenVoice V2 streaming engine, and Supabase auth (REST + WebSocket, per-user
+rate limiting).
 
-- **M1** — vertical echo slice (mic → WS → gateway echo → playback).
-- **M2** — data foundation: gateway Postgres + Redis, wired to `/healthz`.
-- **M3** — gRPC proxy + swappable inference backend (`passthrough` / `cartesia`).
-- **M4** — VAD-segmented Cartesia conversion (M4a), voice cloning + `voices` registry (M4b),
-  Voice Studio UI + voice selection + dev compose stack (M4c).
-- **M5a** — self-hosted block-streaming ONNX Runtime backend (`self_hosted` + `cloud_gpu` modes,
-  ONNX model contract, local/S3 model loading, latency benchmark).
-- **M5b** — real voice weights: OpenVoice V2 ONNX export (vendored converter, torch only in the
-  offline `export` dep group), torch-free instant clone wired into `POST /voices` (the stored
-  `voice_id` **is** the streaming `model_id`), seam crossfade + exact 1:1 stream accounting,
-  block/context tuned on real-weight measurements (60ms/140ms; ~107ms added latency, RTF ~0.8
-  on a laptop CPU). RVC single-graph export deferred (needs HuBERT+F0 composition).
-- **M6a** — Supabase-hosted auth: the gateway verifies Supabase access tokens offline (HS256
-  against the project JWT secret) and proxies signup/login to GoTrue; `/voices` is per-user
-  (Bearer-gated, `Voice.user_id` FK, mirror `User` row keyed by Supabase `sub`); login-gated
-  Studio + `/login` page.
-- **M6b** — auth on the realtime socket + per-user rate limiting: `/ws/voice` reads a
-  `?token=<jwt>` query param and classifies the connection before accept —
-  authenticated (rate-limited), anonymous echo-only demo (default), or rejected (close
-  4001). Optional by default (`WS_REQUIRE_AUTH` flag) so the demo survives; an invalid
-  token is always rejected. Redis `RateLimiter` enforces per-plan concurrency (atomic Lua
-  over a per-user sorted set) + monthly minutes (close 4029), fail-open on a Redis outage.
-  Browser worker appends the token and stops retrying on 4001/4029.
-
-The canonical milestone tracker — current state and the concrete next steps (the rented-GPU
-`cloud_gpu` bench run closing M5; then M7 CI/observability, M8 calling) — is
-**[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus
-the relevant `agents/*.agent.md` before picking up work. `docs/PRODUCT_SPEC.md` remains the detailed spec
-(data models, API design, latency budgets). Still verify a directory/command/file exists before assuming
-it — parts of the planned layout (auth, self-hosted GPU, calling) are not built yet.
+**Do not trust this paragraph to stay current.** The canonical milestone tracker — current state,
+per-milestone detail, and the concrete next steps (the rented-GPU `cloud_gpu` bench run closing M5;
+then M7 CI/observability, M8 calling) — is **[docs/ROADMAP.md](docs/ROADMAP.md)**. Read it plus the
+relevant `agents/*.agent.md` before picking up work. `docs/PRODUCT_SPEC.md` remains the detailed spec
+(data models, API design, latency budgets). Still verify a directory/command/file exists before
+assuming it — later roadmap items (M7 CI/observability, M8 calling) are not built yet.
 
 ## What this project is
 
@@ -52,13 +30,9 @@ Mockingbird is a **portfolio / learning** project — optimize for clean archite
 not production hardening. Bias toward small, compartmentalized specs (one service or one vertical slice at a
 time) and surface key decisions for explicit sign-off before implementing.
 
-M4, M5a/M5b, and M6 (auth) are done locally (real OpenVoice V2 weights streaming through the
-self-hosted engine, instant clone, tuned latency; Supabase auth on `/voices` and `/ws/voice`
-with per-user rate limiting). **Two things remain open: close M5 with the rented-GPU
-(`cloud_gpu`) benchmark run** (`infrastructure/scripts/provision_cloud_gpu.sh`), then **M7**
-(CI + observability). Per the 2026-07-04 owner decision self-hosted is the first-priority
-engine; Cartesia and `cloud_gpu` are separate modes, not fallbacks. See
-[docs/ROADMAP.md](docs/ROADMAP.md) for the per-step breakdown.
+Per the 2026-07-04 owner decision, self-hosted is the first-priority engine; Cartesia and `cloud_gpu`
+are separate co-equal modes, not fallbacks. Don't re-litigate that hierarchy without a new owner
+decision. Current open work is tracked in [docs/ROADMAP.md](docs/ROADMAP.md), not here.
 
 ## Architecture
 
@@ -66,13 +40,13 @@ The project is an **all-Python stack**: frontend, gateway/middleware, and infere
 Three independently-developed services connected by a binary WebSocket audio protocol:
 
 ```
-Browser-facing Python frontend (e.g. FastAPI/Starlette + AudioWorklet JS shim for mic capture)
+frontend/ — FastAPI + Jinja2 + HTMX, AudioWorklet JS shim for mic capture (port 3000)
    │ wss:// binary PCM frames (20ms chunks, Int16, 48kHz)
    ▼
-Python Gateway / middleware (FastAPI or similar) — WS connection mgmt, auth, model routing
-   │ gRPC
+gateway/ — FastAPI, WS connection mgmt, auth, rate limiting, model routing (port 3001)
+   │ gRPC (port 50051)
    ▼
-Python FastAPI ML Inference Service (RVC / OpenVoice / GPT-SoVITS, ONNX Runtime GPU)
+inference/ — FastAPI ML service, OpenVoice V2 / Cartesia backends, ONNX Runtime (port 8001)
 ```
 
 - All three services live in the same language and should share tooling (uv for dependencies, Ruff for
@@ -131,6 +105,28 @@ all three services:
   Celery + Redis for training jobs.
 - **Infra**: Docker + Kubernetes, NVIDIA GPU (A10G/L4), Twilio (PSTN), Prometheus + Grafana.
 - **Testing**: pytest across all services; manual + latency benchmarks for the audio path.
+
+## Common commands
+
+All commands run from inside the relevant service directory (`frontend/`, `gateway/`, `inference/`) —
+each has its own `pyproject.toml` and `uv.lock`:
+
+```bash
+uv run pytest                 # test one service
+uv run ruff format .          # format
+uv run ruff check --fix .     # lint
+```
+
+Full local stack (Postgres + Redis + all three services, CPU-only):
+
+```bash
+docker compose -f infrastructure/docker-compose.yml up --build
+# frontend http://localhost:3000/studio, gateway :3001, inference :8001 (gRPC :50051)
+```
+
+Running one service directly, e.g. inference:
+`INFERENCE_BACKEND=passthrough uv run uvicorn app.health:app --port 8001`. Gateway DB migrations are
+Alembic (`uv run alembic upgrade head` in `gateway/`; the compose stack runs them automatically).
 
 ## Important notes
 
