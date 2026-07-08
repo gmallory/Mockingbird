@@ -12,25 +12,25 @@ You are the Inference Agent for Mockingbird. Your responsibility is building the
 
 ## Tech Stack
 
-| Technology | Purpose |
-|-----------|---------|
-| **Python 3.14** | Runtime |
-| **FastAPI** | HTTP/WebSocket framework |
-| **Uvicorn** | ASGI server |
-| **PyTorch 2.x** | ML framework |
-| **ONNX Runtime (GPU)** | Optimized model inference |
-| **TensorRT** | NVIDIA GPU optimization (production) |
-| **RVC** | Core real-time voice conversion |
-| **OpenVoice v2** | Zero-shot instant voice cloning |
-| **GPT-SoVITS** | Few-shot voice cloning (5-second samples) |
-| **Silero VAD** | Voice activity detection |
-| **FAISS** | Feature retrieval for RVC |
-| **Celery** | Async training job queue |
-| **Redis** | Celery broker + caching |
-| **librosa / soundfile** | Audio I/O and preprocessing |
-| **gRPC (grpcio)** | Communication with gateway |
-| **boto3** | S3 model/audio storage |
-| **Prometheus client** | Metrics export |
+| Technology              | Purpose                                   |
+| ----------------------- | ----------------------------------------- |
+| **Python 3.14**         | Runtime                                   |
+| **FastAPI**             | HTTP/WebSocket framework                  |
+| **Uvicorn**             | ASGI server                               |
+| **PyTorch 2.x**         | ML framework                              |
+| **ONNX Runtime (GPU)**  | Optimized model inference                 |
+| **TensorRT**            | NVIDIA GPU optimization (production)      |
+| **RVC**                 | Core real-time voice conversion           |
+| **OpenVoice v2**        | Zero-shot instant voice cloning           |
+| **GPT-SoVITS**          | Few-shot voice cloning (5-second samples) |
+| **Silero VAD**          | Voice activity detection                  |
+| **FAISS**               | Feature retrieval for RVC                 |
+| **Celery**              | Async training job queue                  |
+| **Redis**               | Celery broker + caching                   |
+| **librosa / soundfile** | Audio I/O and preprocessing               |
+| **gRPC (grpcio)**       | Communication with gateway                |
+| **boto3**               | S3 model/audio storage                    |
+| **Prometheus client**   | Metrics export                            |
 
 ---
 
@@ -584,13 +584,13 @@ inference/
 
 ## Performance Targets
 
-| Metric | Target | Measurement |
-|--------|--------|-------------|
-| RVC inference (20ms chunk) | < 80ms | `time.perf_counter()` in streaming loop |
-| OpenVoice inference (20ms chunk) | < 100ms | Same |
-| Model load time (from cache) | < 2s | Startup measurement |
-| Model load time (from S3) | < 30s | Including download |
-| GPU memory per voice model | < 200MB | `torch.cuda.memory_allocated()` |
-| Concurrent streams per A10G | ≥ 8 | Load test |
-| Training time (10 min audio) | < 30 min | Celery task duration |
-| Audio quality (MOS) | ≥ 3.5 | PESQ/POLQA evaluation |
+| Metric                           | Target   | Measurement                             |
+| -------------------------------- | -------- | --------------------------------------- |
+| RVC inference (20ms chunk)       | < 80ms   | `time.perf_counter()` in streaming loop |
+| OpenVoice inference (20ms chunk) | < 100ms  | Same                                    |
+| Model load time (from cache)     | < 2s     | Startup measurement                     |
+| Model load time (from S3)        | < 30s    | Including download                      |
+| GPU memory per voice model       | < 200MB  | `torch.cuda.memory_allocated()`         |
+| Concurrent streams per A10G      | ≥ 8      | Load test                               |
+| Training time (10 min audio)     | < 30 min | Celery task duration                    |
+| Audio quality (MOS)              | ≥ 3.5    | PESQ/POLQA evaluation                   |

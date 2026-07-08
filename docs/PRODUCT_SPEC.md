@@ -50,12 +50,12 @@ There is no web-based product that provides **real-time, high-fidelity voice clo
 
 ## 3. Target Users
 
-| Persona | Description |
-|---------|-------------|
-| **Content Creators** | YouTubers, podcasters, streamers who want to create character voices |
-| **Voice Actors** | Professionals who need to quickly audition different voice styles |
-| **Privacy-Conscious Callers** | Users who want to mask their real voice during calls |
-| **Entertainment Users** | People who want to prank friends or have fun with voice transformation |
+| Persona                       | Description                                                            |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| **Content Creators**          | YouTubers, podcasters, streamers who want to create character voices   |
+| **Voice Actors**              | Professionals who need to quickly audition different voice styles      |
+| **Privacy-Conscious Callers** | Users who want to mask their real voice during calls                   |
+| **Entertainment Users**       | People who want to prank friends or have fun with voice transformation |
 
 ---
 
@@ -72,13 +72,13 @@ The inference engine is selected via `INFERENCE_BACKEND` (see `inference/app/con
 so switching modes never changes the WS/gRPC contract. These are **separate, co-equal
 modes** — the cloud modes are not fallbacks for the GPU path.
 
-| Mode | What it is | Latency model | Status |
-|------|-----------|---------------|--------|
+| Mode                        | What it is                                                                                                                                                                                                                                                                                                                           | Latency model                                                                                      | Status                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | -------------------------- |
 | **`self_hosted`** (primary) | OpenVoice V2 (+ RVC later) on ONNX Runtime. **First-priority engine** — the path this spec's per-frame latency budget applies to. Streaming block engine + ONNX model contract landed in M5a; real OpenVoice weights, ONNX export, and instant clone landed in M5b (RVC single-graph export deferred — needs HuBERT+F0 composition). | Per-frame streaming; **measured on real weights** (see below); GPU (`cloud_gpu`) run still pending | Real weights running (M5b) |
-| **`cloud_gpu`** | The same self-hosted inference stack deployed on a rented GPU (A10G/L4): run inference there with `INFERENCE_BACKEND=cloud_gpu`, point the gateway's `INFERENCE_GRPC_URL` at that box. | Per-frame streaming, + extra network RTT | Mode implemented (M5a) |
-| **`cartesia`** | Cartesia's **clip-based** voice changer (`/voice-changer/sse`). Utterance-segmented: VAD detects end-of-speech, the whole utterance is converted as a clip. Walkie-talkie feel. | Utterance latency (see below); **measured felt floor ~2s** | Implemented (M4a–c) |
-| **`elevenlabs`** | ElevenLabs speech-to-speech (also clip-in / stream-out). | Utterance latency | Placeholder |
-| `passthrough` | Echo, for dev/tests. | 1:1 frames | Implemented (M1/M3) |
+| **`cloud_gpu`**             | The same self-hosted inference stack deployed on a rented GPU (A10G/L4): run inference there with `INFERENCE_BACKEND=cloud_gpu`, point the gateway's `INFERENCE_GRPC_URL` at that box.                                                                                                                                               | Per-frame streaming, + extra network RTT                                                           | Mode implemented (M5a)     |
+| **`cartesia`**              | Cartesia's **clip-based** voice changer (`/voice-changer/sse`). Utterance-segmented: VAD detects end-of-speech, the whole utterance is converted as a clip. Walkie-talkie feel.                                                                                                                                                      | Utterance latency (see below); **measured felt floor ~2s**                                         | Implemented (M4a–c)        |
+| **`elevenlabs`**            | ElevenLabs speech-to-speech (also clip-in / stream-out).                                                                                                                                                                                                                                                                             | Utterance latency                                                                                  | Placeholder                |
+| `passthrough`               | Echo, for dev/tests.                                                                                                                                                                                                                                                                                                                 | 1:1 frames                                                                                         | Implemented (M1/M3)        |
 
 Two latency metrics apply, one per latency model:
 
@@ -161,17 +161,17 @@ Two latency metrics apply, one per latency model:
 Server-side stages measured on real weights in M5b (laptop CPU: model inference
 p95 47.5ms, inside the 80ms line); network legs and the GPU run still pending.
 
-| Stage | Target | Notes |
-|-------|--------|-------|
-| Audio Capture + Buffering | 10ms | 128-sample AudioWorklet render quanta |
-| Encoding (PCM → Int16) | 2ms | Lightweight conversion |
-| Network Upload (edge) | 20ms | Edge-deployed server, <40ms RTT |
-| Server Preprocessing | 5ms | VAD check, normalization |
-| **Model Inference (GPU)** | **80ms** | Optimized RVC on ONNX Runtime + TensorRT |
-| Server Postprocessing | 5ms | Volume normalization, artifact smoothing |
-| Network Download | 20ms | Same edge path |
-| Decode + Playback Buffer | 30ms | Jitter buffer for smooth output |
-| **Total** | **~172ms** | ✅ Well under 300ms target |
+| Stage                     | Target     | Notes                                    |
+| ------------------------- | ---------- | ---------------------------------------- |
+| Audio Capture + Buffering | 10ms       | 128-sample AudioWorklet render quanta    |
+| Encoding (PCM → Int16)    | 2ms        | Lightweight conversion                   |
+| Network Upload (edge)     | 20ms       | Edge-deployed server, <40ms RTT          |
+| Server Preprocessing      | 5ms        | VAD check, normalization                 |
+| **Model Inference (GPU)** | **80ms**   | Optimized RVC on ONNX Runtime + TensorRT |
+| Server Postprocessing     | 5ms        | Volume normalization, artifact smoothing |
+| Network Download          | 20ms       | Same edge path                           |
+| Decode + Playback Buffer  | 30ms       | Jitter buffer for smooth output          |
+| **Total**                 | **~172ms** | ✅ Well under 300ms target                |
 
 ---
 
@@ -179,10 +179,10 @@ p95 47.5ms, inside the 80ms line); network legs and the GPU run still pending.
 
 #### Two-Tier Cloning System
 
-| Mode | Audio Required | Ready In | Quality | Use Case | Status |
-|------|---------------|----------|---------|----------|--------|
-| **Instant Clone** (OpenVoice / Cartesia) | 10–30 seconds | Immediate | ★★★★ Good | Quick setup, previewing | **Implemented** (M4b Cartesia, M5b self-hosted) |
-| **HD Clone** (RVC fine-tune) | 10–30 minutes | 30 min–2 hrs | ★★★★★ Excellent | Production calls | **Planned — M9** (in scope, owner decision 2026-07-07) |
+| Mode                                     | Audio Required | Ready In     | Quality         | Use Case                | Status                                                 |
+| ---------------------------------------- | -------------- | ------------ | --------------- | ----------------------- | ------------------------------------------------------ |
+| **Instant Clone** (OpenVoice / Cartesia) | 10–30 seconds  | Immediate    | ★★★★ Good       | Quick setup, previewing | **Implemented** (M4b Cartesia, M5b self-hosted)        |
+| **HD Clone** (RVC fine-tune)             | 10–30 minutes  | 30 min–2 hrs | ★★★★★ Excellent | Production calls        | **Planned — M9** (in scope, owner decision 2026-07-07) |
 
 #### Training Pipeline (planned — M9)
 
@@ -257,12 +257,12 @@ hangup.
 
 Mockingbird supports multiple audio routing strategies for different use cases:
 
-| Mode | How It Works | Best For | Latency |
-|------|-------------|----------|---------|
-| **Built-in VoIP** (Primary) | Calls made through Mockingbird's integrated dialer | Phone calls | ~170ms |
-| **Browser Extension** (Future) | Chrome extension intercepts WebRTC in Google Meet, Zoom Web, Discord | Video conferencing | ~150ms |
-| **Companion App** (Future) | Electron/Tauri desktop app with virtual audio driver | Any desktop app | ~120ms |
-| **Preview Mode** | Real-time mic → transformed output through speakers | Testing & demo | ~170ms |
+| Mode                           | How It Works                                                         | Best For           | Latency |
+| ------------------------------ | -------------------------------------------------------------------- | ------------------ | ------- |
+| **Built-in VoIP** (Primary)    | Calls made through Mockingbird's integrated dialer                   | Phone calls        | ~170ms  |
+| **Browser Extension** (Future) | Chrome extension intercepts WebRTC in Google Meet, Zoom Web, Discord | Video conferencing | ~150ms  |
+| **Companion App** (Future)     | Electron/Tauri desktop app with virtual audio driver                 | Any desktop app    | ~120ms  |
+| **Preview Mode**               | Real-time mic → transformed output through speakers                  | Testing & demo     | ~170ms  |
 
 ---
 
@@ -270,13 +270,13 @@ Mockingbird supports multiple audio routing strategies for different use cases:
 
 #### Pages & Views
 
-| Page | Description | Status |
-|------|-------------|--------|
-| **Dashboard** | Overview: active voice model, recent calls, quick-start actions | Planned — M10 |
-| **Voice Studio** | Upload samples, clone voices, manage voice library | Implemented (M4c, login-gated M6a) |
-| **Dialer** | Phone interface — dial pad, recent calls, mid-call controls | Implemented (M8a; contacts descoped) |
-| **Live Monitor** | Live mic → transform → playback loop, utterance latency + level meters | Implemented (M4a/M4c, at `/`) |
-| **Settings** | Audio I/O config, quality presets, account | Planned — M10 (billing descoped) |
+| Page             | Description                                                            | Status                               |
+| ---------------- | ---------------------------------------------------------------------- | ------------------------------------ |
+| **Dashboard**    | Overview: active voice model, recent calls, quick-start actions        | Planned — M10                        |
+| **Voice Studio** | Upload samples, clone voices, manage voice library                     | Implemented (M4c, login-gated M6a)   |
+| **Dialer**       | Phone interface — dial pad, recent calls, mid-call controls            | Implemented (M8a; contacts descoped) |
+| **Live Monitor** | Live mic → transform → playback loop, utterance latency + level meters | Implemented (M4a/M4c, at `/`)        |
+| **Settings**     | Audio I/O config, quality presets, account                             | Planned — M10 (billing descoped)     |
 
 #### Key UI Components
 - **Latency Indicator** — utterance latency + p95 on the Monitor — *implemented (M4c)*;
@@ -293,48 +293,48 @@ Mockingbird supports multiple audio routing strategies for different use cases:
 ## 5. Technology Stack
 
 ### Frontend
-| Technology | Purpose |
-|-----------|---------|
-| **FastAPI + Jinja2 + HTMX** (Python) | Server-rendered UI, routing, page handlers |
-| **Uvicorn** | ASGI server |
-| **Web Audio API** | AudioWorklet for real-time audio processing (minimal browser JS glue) |
-| **WebSocket (binary)** | Streaming audio to/from inference server (raw PCM Int16) |
-| **Twilio REST + Media Streams** (httpx, gateway-side; no vendor SDK) | PSTN calling integration (M8a) |
-| **Canvas API** | Waveform and spectrogram visualizations *(planned — M10)* |
-| **SharedArrayBuffer** | Zero-copy worklet hand-off *(future optimization; postMessage today)* |
+| Technology                                                           | Purpose                                                               |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **FastAPI + Jinja2 + HTMX** (Python)                                 | Server-rendered UI, routing, page handlers                            |
+| **Uvicorn**                                                          | ASGI server                                                           |
+| **Web Audio API**                                                    | AudioWorklet for real-time audio processing (minimal browser JS glue) |
+| **WebSocket (binary)**                                               | Streaming audio to/from inference server (raw PCM Int16)              |
+| **Twilio REST + Media Streams** (httpx, gateway-side; no vendor SDK) | PSTN calling integration (M8a)                                        |
+| **Canvas API**                                                       | Waveform and spectrogram visualizations *(planned — M10)*             |
+| **SharedArrayBuffer**                                                | Zero-copy worklet hand-off *(future optimization; postMessage today)* |
 
 ### Backend — Gateway
-| Technology | Purpose |
-|-----------|---------|
-| **Python 3.14** (FastAPI) | WebSocket connection management, auth, routing |
-| **Redis** | Session management, model routing, pub/sub |
-| **PostgreSQL** | User accounts, voice models metadata, call history |
-| **S3 / GCS** | Audio sample storage, model weight storage |
+| Technology                | Purpose                                            |
+| ------------------------- | -------------------------------------------------- |
+| **Python 3.14** (FastAPI) | WebSocket connection management, auth, routing     |
+| **Redis**                 | Session management, model routing, pub/sub         |
+| **PostgreSQL**            | User accounts, voice models metadata, call history |
+| **S3 / GCS**              | Audio sample storage, model weight storage         |
 
 ### Backend — ML Inference
-| Technology | Purpose |
-|-----------|---------|
-| **Python 3.14** (FastAPI + Uvicorn) | ML service orchestration, WebSocket audio streaming |
-| **OpenVoice v2** | Zero-shot instant voice cloning — *implemented (M5b, ONNX export)* |
-| **ONNX Runtime** | Optimized model inference — *implemented (M5a; CUDA/CoreML/CPU)* |
-| **RVC** (Retrieval-based Voice Conversion) | HD Clone conversion engine — *planned (M9)* |
-| **FAISS** | Feature retrieval for RVC — *planned (M9)* |
-| **Celery + Redis** | Async training job queue — *planned (M9)* |
-| **TensorRT** | NVIDIA GPU acceleration — *pending the rented-GPU deploy (M5 bench)* |
-| **Silero VAD** | Voice activity detection — *energy/RMS VAD implemented instead (M4a); Silero optional upgrade* |
-| **GPT-SoVITS** | Alternative zero-shot cloning — *descoped: future/optional* |
+| Technology                                 | Purpose                                                                                        |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| **Python 3.14** (FastAPI + Uvicorn)        | ML service orchestration, WebSocket audio streaming                                            |
+| **OpenVoice v2**                           | Zero-shot instant voice cloning — *implemented (M5b, ONNX export)*                             |
+| **ONNX Runtime**                           | Optimized model inference — *implemented (M5a; CUDA/CoreML/CPU)*                               |
+| **RVC** (Retrieval-based Voice Conversion) | HD Clone conversion engine — *planned (M9)*                                                    |
+| **FAISS**                                  | Feature retrieval for RVC — *planned (M9)*                                                     |
+| **Celery + Redis**                         | Async training job queue — *planned (M9)*                                                      |
+| **TensorRT**                               | NVIDIA GPU acceleration — *pending the rented-GPU deploy (M5 bench)*                           |
+| **Silero VAD**                             | Voice activity detection — *energy/RMS VAD implemented instead (M4a); Silero optional upgrade* |
+| **GPT-SoVITS**                             | Alternative zero-shot cloning — *descoped: future/optional*                                    |
 
 ### Infrastructure
-| Technology | Purpose |
-|-----------|---------|
-| **Docker Compose** | Full local stack (Postgres, Redis, 3 services, monitoring) — *implemented (M4c/M7)* |
-| **GitHub Actions** | CI: format + lint + tests × 3 services + image builds — *implemented (M7)* |
-| **Prometheus + Grafana** | Latency monitoring, system metrics — *implemented (M7)* |
-| **Twilio** | PSTN gateway, phone numbers — *implemented (M8a)* |
-| **NVIDIA GPU node** (A10G / L4, rented) | Inference compute — *provisioning script ready; bench run pending (M5)* |
-| **Kubernetes** | Container orchestration — *descoped: future/commercial* |
-| **CloudFlare / Fly.io Edge** | Edge deployment for low latency — *descoped: future/commercial* |
-| **Sentry** | Error tracking — *descoped: future/commercial* |
+| Technology                              | Purpose                                                                             |
+| --------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Docker Compose**                      | Full local stack (Postgres, Redis, 3 services, monitoring) — *implemented (M4c/M7)* |
+| **GitHub Actions**                      | CI: format + lint + tests × 3 services + image builds — *implemented (M7)*          |
+| **Prometheus + Grafana**                | Latency monitoring, system metrics — *implemented (M7)*                             |
+| **Twilio**                              | PSTN gateway, phone numbers — *implemented (M8a)*                                   |
+| **NVIDIA GPU node** (A10G / L4, rented) | Inference compute — *provisioning script ready; bench run pending (M5)*             |
+| **Kubernetes**                          | Container orchestration — *descoped: future/commercial*                             |
+| **CloudFlare / Fly.io Edge**            | Edge deployment for low latency — *descoped: future/commercial*                     |
+| **Sentry**                              | Error tracking — *descoped: future/commercial*                                      |
 
 ---
 
@@ -456,23 +456,23 @@ is **optional** (M6b): a valid `?token=` yields an authenticated, rate-limited s
 no token yields the echo-only demo (unless `WS_REQUIRE_AUTH=true`); an invalid token is
 always rejected (close 4001; over-cap 4029). Gateway on `:3001`, inference on `:8001`.
 
-| Method | Endpoint | Service | Auth | Description |
-|--------|----------|---------|------|-------------|
-| GET | `/healthz` | gateway, inference | none | Health incl. Postgres/Redis (gateway) |
-| GET | `/metrics` | gateway, inference | none | Prometheus exposition (M7) |
-| WS | `/ws/voice` | gateway | optional `?token=` (M6b) | Binary audio streaming (contract above); `join_call` routes output to a call bridge (M8a) |
-| WS | `/ws/twilio/{call_id}` | gateway | per-call secret (M8a) | Twilio Media Stream leg of an outbound call |
-| POST | `/auth/signup` | gateway | none | Proxy signup to Supabase (GoTrue); returns the session |
-| POST | `/auth/login` | gateway | none | Proxy password login to Supabase; returns the session |
-| GET | `/auth/me` | gateway | Bearer | Verify the token, return the mirrored local user |
-| GET | `/voices` | gateway | Bearer | List the caller's cloned voices |
-| POST | `/voices` | gateway | Bearer | Multipart `clip` + `label` + `language` → proxies to inference clone, persists a row owned by the caller |
-| POST | `/voices` | inference | none | Multipart clone, returns `voice_id` (internal, called by gateway) |
-| POST | `/api/calls/outbound` | gateway | Bearer | Create Twilio call + bridge, persist `CallRecord` (M8a) |
-| GET | `/api/calls` | gateway | Bearer | List the caller's call history (M8a) |
-| GET | `/api/calls/{id}` | gateway | Bearer | Call details (M8a) |
-| POST | `/api/calls/{id}/hangup` | gateway | Bearer | End the call; record closes regardless of Twilio (M8a) |
-| POST | `/api/twilio/status` | gateway | X-Twilio-Signature | Status callback; drives teardown (M8a) |
+| Method | Endpoint                 | Service            | Auth                     | Description                                                                                              |
+| ------ | ------------------------ | ------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| GET    | `/healthz`               | gateway, inference | none                     | Health incl. Postgres/Redis (gateway)                                                                    |
+| GET    | `/metrics`               | gateway, inference | none                     | Prometheus exposition (M7)                                                                               |
+| WS     | `/ws/voice`              | gateway            | optional `?token=` (M6b) | Binary audio streaming (contract above); `join_call` routes output to a call bridge (M8a)                |
+| WS     | `/ws/twilio/{call_id}`   | gateway            | per-call secret (M8a)    | Twilio Media Stream leg of an outbound call                                                              |
+| POST   | `/auth/signup`           | gateway            | none                     | Proxy signup to Supabase (GoTrue); returns the session                                                   |
+| POST   | `/auth/login`            | gateway            | none                     | Proxy password login to Supabase; returns the session                                                    |
+| GET    | `/auth/me`               | gateway            | Bearer                   | Verify the token, return the mirrored local user                                                         |
+| GET    | `/voices`                | gateway            | Bearer                   | List the caller's cloned voices                                                                          |
+| POST   | `/voices`                | gateway            | Bearer                   | Multipart `clip` + `label` + `language` → proxies to inference clone, persists a row owned by the caller |
+| POST   | `/voices`                | inference          | none                     | Multipart clone, returns `voice_id` (internal, called by gateway)                                        |
+| POST   | `/api/calls/outbound`    | gateway            | Bearer                   | Create Twilio call + bridge, persist `CallRecord` (M8a)                                                  |
+| GET    | `/api/calls`             | gateway            | Bearer                   | List the caller's call history (M8a)                                                                     |
+| GET    | `/api/calls/{id}`        | gateway            | Bearer                   | Call details (M8a)                                                                                       |
+| POST   | `/api/calls/{id}/hangup` | gateway            | Bearer                   | End the call; record closes regardless of Twilio (M8a)                                                   |
+| POST   | `/api/twilio/status`     | gateway            | X-Twilio-Signature       | Status callback; drives teardown (M8a)                                                                   |
 
 Auth model (M6a): Supabase (GoTrue) mints access tokens; the gateway proxies
 signup/login to it and verifies the returned HS256 token offline against the project
@@ -483,15 +483,15 @@ request so `Voice.user_id` can FK to it.
 
 Bearer-authenticated; milestones per [ROADMAP.md](ROADMAP.md).
 
-| Method | Endpoint | Description | Milestone |
-|--------|----------|-------------|-----------|
-| POST | `/api/voices/:id/train` | Trigger HD training (RVC fine-tune) | M9 |
-| GET | `/api/voices/:id/train/status` | Check training progress | M9 |
-| GET | `/api/voices/:id` | Get voice model details | M10 |
-| DELETE | `/api/voices/:id` | Delete voice model | M10 |
-| PATCH | `/api/voices/:id` | Update model settings (pitch, speed, breathiness) | M10 |
-| POST | `/api/voices/:id/preview` | Generate preview audio clip | M10 |
-| GET | `/api/user/usage` | Get usage statistics | future/commercial |
+| Method | Endpoint                       | Description                                       | Milestone         |
+| ------ | ------------------------------ | ------------------------------------------------- | ----------------- |
+| POST   | `/api/voices/:id/train`        | Trigger HD training (RVC fine-tune)               | M9                |
+| GET    | `/api/voices/:id/train/status` | Check training progress                           | M9                |
+| GET    | `/api/voices/:id`              | Get voice model details                           | M10               |
+| DELETE | `/api/voices/:id`              | Delete voice model                                | M10               |
+| PATCH  | `/api/voices/:id`              | Update model settings (pitch, speed, breathiness) | M10               |
+| POST   | `/api/voices/:id/preview`      | Generate preview audio clip                       | M10               |
+| GET    | `/api/user/usage`              | Get usage statistics                              | future/commercial |
 
 ---
 
@@ -632,36 +632,36 @@ bench + M8a live run — see §15). **Scalability** and the uptime row are
 future/commercial targets, not v1 gates.
 
 ### Performance (binding, v1)
-| Metric | Target |
-|--------|--------|
-| End-to-end voice latency | < 300ms (P95); ~172ms budget in §4.1 |
-| Model inference time | < 100ms per block (80ms GPU line; laptop-CPU p95 47.5ms measured M5b) |
-| Audio dropout rate | < 0.1% of chunks |
-| Time to first audio output | < 500ms after call connect |
+| Metric                     | Target                                                                |
+| -------------------------- | --------------------------------------------------------------------- |
+| End-to-end voice latency   | < 300ms (P95); ~172ms budget in §4.1                                  |
+| Model inference time       | < 100ms per block (80ms GPU line; laptop-CPU p95 47.5ms measured M5b) |
+| Audio dropout rate         | < 0.1% of chunks                                                      |
+| Time to first audio output | < 500ms after call connect                                            |
 
 ### Scalability (future/commercial)
-| Metric | Target |
-|--------|--------|
-| Concurrent users per GPU | 8–12 (A10G), 15–20 (A100) |
-| Concurrent active calls | 10,000+ (with auto-scaling GPU cluster) |
-| Voice model storage | Unlimited (S3/GCS) |
-| Training job throughput | 50+ concurrent jobs |
+| Metric                   | Target                                  |
+| ------------------------ | --------------------------------------- |
+| Concurrent users per GPU | 8–12 (A10G), 15–20 (A100)               |
+| Concurrent active calls  | 10,000+ (with auto-scaling GPU cluster) |
+| Voice model storage      | Unlimited (S3/GCS)                      |
+| Training job throughput  | 50+ concurrent jobs                     |
 
 ### Reliability
-| Metric | Target |
-|--------|--------|
-| Service uptime | 99.9% *(future/commercial — no hosted deployment in v1)* |
-| WebSocket reconnect time | < 2 seconds — *implemented (backoff reconnect, M1)* |
-| Graceful degradation | Passthrough (unmodified voice) on failure — *implemented (M3/M5a)* |
+| Metric                   | Target                                                             |
+| ------------------------ | ------------------------------------------------------------------ |
+| Service uptime           | 99.9% *(future/commercial — no hosted deployment in v1)*           |
+| WebSocket reconnect time | < 2 seconds — *implemented (backoff reconnect, M1)*                |
+| Graceful degradation     | Passthrough (unmodified voice) on failure — *implemented (M3/M5a)* |
 
 ### Security
-| Requirement | Implementation |
-|-------------|---------------|
-| Audio encryption in transit | TLS 1.3 (wss://) — deployment/tunnel concern |
-| Audio encryption at rest | AES-256 for stored recordings *(future — recording descoped)* |
-| Voice model isolation | Per-user rows + owned-voice checks — *implemented (M6a/M8a)* |
-| Authentication | Supabase (GoTrue) JWT — *implemented (M6a/M6b)* |
-| Rate limiting | Per-user WS concurrency + monthly minutes (Redis) — *implemented (M6b)* |
+| Requirement                 | Implementation                                                          |
+| --------------------------- | ----------------------------------------------------------------------- |
+| Audio encryption in transit | TLS 1.3 (wss://) — deployment/tunnel concern                            |
+| Audio encryption at rest    | AES-256 for stored recordings *(future — recording descoped)*           |
+| Voice model isolation       | Per-user rows + owned-voice checks — *implemented (M6a/M8a)*            |
+| Authentication              | Supabase (GoTrue) JWT — *implemented (M6a/M6b)*                         |
+| Rate limiting               | Per-user WS concurrency + monthly minutes (Redis) — *implemented (M6b)* |
 
 ---
 
@@ -715,11 +715,11 @@ future/commercial targets, not v1 gates.
 Plan tiers exist in code only to parameterize WS rate limits (`PLAN_LIMITS`, M6b).
 No billing is built or planned for v1.
 
-| Plan | Price | Included | Features |
-|------|-------|----------|----------|
-| **Free** | $0/mo | 5 min/mo transformed calls, 1 Instant Clone | Preview mode, basic UI |
-| **Pro** | $29/mo | 300 min/mo, 5 HD Clones, 20 Instant Clones | All calling features, call recording, priority GPU |
-| **Enterprise** | Custom | Unlimited minutes, unlimited clones | Dedicated GPU, SLA, API access, custom integrations |
+| Plan           | Price  | Included                                    | Features                                            |
+| -------------- | ------ | ------------------------------------------- | --------------------------------------------------- |
+| **Free**       | $0/mo  | 5 min/mo transformed calls, 1 Instant Clone | Preview mode, basic UI                              |
+| **Pro**        | $29/mo | 300 min/mo, 5 HD Clones, 20 Instant Clones  | All calling features, call recording, priority GPU  |
+| **Enterprise** | Custom | Unlimited minutes, unlimited clones         | Dedicated GPU, SLA, API access, custom integrations |
 
 #### Add-ons
 - Extra phone number: $3/mo
@@ -775,14 +775,14 @@ multi-language, enterprise API.
 
 ## 14. Risks & Mitigations
 
-| Risk | Impact | Likelihood | Mitigation |
-|------|--------|-----------|------------|
-| Latency exceeds 300ms | High | Medium | Edge deployment, model optimization, adaptive quality |
-| GPU costs too high | High | Medium | Model distillation, per-user quotas, hybrid cloud/self-hosted |
-| Audio quality artifacts | Medium | High | Overlap-add smoothing, post-processing, user-adjustable quality |
-| WebSocket connection drops | Medium | Medium | Auto-reconnect with exponential backoff, voice passthrough fallback |
-| Browser compatibility | Medium | Low | Progressive enhancement, fallback to cloud-rendered audio |
-| Model training failures | Low | Medium | Automated retries, audio quality pre-validation, user guidance |
+| Risk                       | Impact | Likelihood | Mitigation                                                          |
+| -------------------------- | ------ | ---------- | ------------------------------------------------------------------- |
+| Latency exceeds 300ms      | High   | Medium     | Edge deployment, model optimization, adaptive quality               |
+| GPU costs too high         | High   | Medium     | Model distillation, per-user quotas, hybrid cloud/self-hosted       |
+| Audio quality artifacts    | Medium | High       | Overlap-add smoothing, post-processing, user-adjustable quality     |
+| WebSocket connection drops | Medium | Medium     | Auto-reconnect with exponential backoff, voice passthrough fallback |
+| Browser compatibility      | Medium | Low        | Progressive enhancement, fallback to cloud-rendered audio           |
+| Model training failures    | Low    | Medium     | Automated retries, audio quality pre-validation, user guidance      |
 
 ---
 
@@ -792,15 +792,15 @@ Mockingbird is a **portfolio piece** (owner decision, 2026-07-07). v1 is success
 every criterion below passes. The commercial metrics that previously lived here moved to
 Appendix C and are aspirational only — nothing in v1 measures them.
 
-| # | Criterion | How it's checked | Status (2026-07-07) |
-|---|-----------|------------------|---------------------|
-| 1 | **Live cloned call**: clone a voice in the Studio, dial a real phone from `/dialer`, callee hears the cloned voice; two-way audio stays stable; status callback closes the record | M8a live-Twilio run (real `TWILIO_*` creds + `PUBLIC_BASE_URL` tunnel, ~15 min) | Pending — code landed & offline-tested |
-| 2 | **GPU latency inside budget**: self-hosted conversion p95 ≤ 80ms/block on a rented A10G/L4 (`DEVICE=cuda`), effective added latency consistent with the ~172ms end-to-end budget (§4.1) | `infrastructure/scripts/provision_cloud_gpu.sh` + `inference/scripts/self_hosted_bench.py`; numbers recorded in §4.1 | Pending — laptop-CPU p95 47.5ms already under the line |
-| 3 | **Instant clone quality**: converted output is recognizably the target voice in a side-by-side listening check | Owner listening check (no automated PESQ harness in v1) | Pending — exercised locally in M5b |
-| 4 | **HD Clone tier**: an RVC fine-tuned voice trains, exports to the M5a ONNX contract, streams end-to-end, and beats the instant clone of the same speaker in a listening check | M9 | Not started |
-| 5 | **UI complete**: Dashboard, Settings, fine-tune controls, similarity meter, waveform visualizer present and working | M10 | Not started |
-| 6 | **Engineering health**: CI green on `main` (format + lint + tests × 3 services + image builds) | GitHub Actions (M7) | Passing |
-| 7 | **Docs current**: README / spec / roadmap match the code; architecture + measured numbers presentable as a portfolio artifact | Review at v1 sign-off (M10) | Ongoing |
+| #   | Criterion                                                                                                                                                                               | How it's checked                                                                                                     | Status (2026-07-07)                                    |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| 1   | **Live cloned call**: clone a voice in the Studio, dial a real phone from `/dialer`, callee hears the cloned voice; two-way audio stays stable; status callback closes the record       | M8a live-Twilio run (real `TWILIO_*` creds + `PUBLIC_BASE_URL` tunnel, ~15 min)                                      | Pending — code landed & offline-tested                 |
+| 2   | **GPU latency inside budget**: self-hosted conversion p95 ≤ 80ms/block on a rented A10G/L4 (`DEVICE=cuda`), effective added latency consistent with the ~172ms end-to-end budget (§4.1) | `infrastructure/scripts/provision_cloud_gpu.sh` + `inference/scripts/self_hosted_bench.py`; numbers recorded in §4.1 | Pending — laptop-CPU p95 47.5ms already under the line |
+| 3   | **Instant clone quality**: converted output is recognizably the target voice in a side-by-side listening check                                                                          | Owner listening check (no automated PESQ harness in v1)                                                              | Pending — exercised locally in M5b                     |
+| 4   | **HD Clone tier**: an RVC fine-tuned voice trains, exports to the M5a ONNX contract, streams end-to-end, and beats the instant clone of the same speaker in a listening check           | M9                                                                                                                   | Not started                                            |
+| 5   | **UI complete**: Dashboard, Settings, fine-tune controls, similarity meter, waveform visualizer present and working                                                                     | M10                                                                                                                  | Not started                                            |
+| 6   | **Engineering health**: CI green on `main` (format + lint + tests × 3 services + image builds)                                                                                          | GitHub Actions (M7)                                                                                                  | Passing                                                |
+| 7   | **Docs current**: README / spec / roadmap match the code; architecture + measured numbers presentable as a portfolio artifact                                                           | Review at v1 sign-off (M10)                                                                                          | Ongoing                                                |
 
 Order of remaining work: M5 GPU bench → M8a live run → M9 → M10 (sign-off).
 
@@ -808,39 +808,39 @@ Order of remaining work: M5 GPU bench → M8a live run → M9 → M10 (sign-off)
 
 ## Appendix A: Competitive Landscape
 
-| Product | Type | Real-time? | Voice Cloning? | Web-based? | Phone Calls? |
-|---------|------|-----------|---------------|-----------|-------------|
-| **Voicemod** | Desktop app | ✅ | ❌ Effects only | ❌ | ❌ |
-| **MorphVOX** | Desktop app | ✅ | ❌ Presets | ❌ | ❌ |
-| **ElevenLabs** | Cloud API | ⚠️ 400ms+ | ✅ Excellent | ✅ API | ❌ |
-| **Resemble.ai** | Cloud API | ⚠️ 200-400ms | ✅ Good | ✅ API | ❌ |
-| **Murf.ai** | Cloud Studio | ❌ Batch | ✅ Production | ✅ | ❌ |
-| **Mockingbird** | Web App | ✅ <300ms | ✅ User-trainable | ✅ | ✅ |
+| Product         | Type         | Real-time?   | Voice Cloning?   | Web-based? | Phone Calls? |
+| --------------- | ------------ | ------------ | ---------------- | ---------- | ------------ |
+| **Voicemod**    | Desktop app  | ✅            | ❌ Effects only   | ❌          | ❌            |
+| **MorphVOX**    | Desktop app  | ✅            | ❌ Presets        | ❌          | ❌            |
+| **ElevenLabs**  | Cloud API    | ⚠️ 400ms+    | ✅ Excellent      | ✅ API      | ❌            |
+| **Resemble.ai** | Cloud API    | ⚠️ 200-400ms | ✅ Good           | ✅ API      | ❌            |
+| **Murf.ai**     | Cloud Studio | ❌ Batch      | ✅ Production     | ✅          | ❌            |
+| **Mockingbird** | Web App      | ✅ <300ms     | ✅ User-trainable | ✅          | ✅            |
 
 ## Appendix B: Open-Source Model Comparison
 
-| Model | Latency | Real-time? | Min Audio | Quality | License |
-|-------|---------|-----------|-----------|---------|---------|
-| **RVC** | ~40-80ms | ✅ | 10 min | ★★★★★ | MIT |
-| **OpenVoice v2** | ~200ms | ⚠️ Adaptable | 10-30 sec | ★★★★ | Apache 2.0 |
-| **GPT-SoVITS** | ~200ms | ✅ Streaming | 5 sec | ★★★★★ | MIT |
-| **CosyVoice 2** | ~150ms | ✅ Native | Zero-shot | ★★★★★ | Apache 2.0 |
-| **Fish Speech** | ~150ms | ✅ | 10-30 sec | ★★★★ | Apache 2.0 |
-| **Kokoro** | ~100ms | ✅ Browser! | Pre-trained | ★★★★ | Apache 2.0 |
-| **So-VITS-SVC** | ~100ms | ⚠️ Fork | 30 min | ★★★★★ | MIT |
-| **Bark** | 5-30s | ❌ | Zero-shot | ★★★★★ | MIT |
-| **Tortoise-TTS** | 10-60s | ❌ | 5 min | ★★★★★ | Apache 2.0 |
+| Model            | Latency  | Real-time?   | Min Audio   | Quality | License    |
+| ---------------- | -------- | ------------ | ----------- | ------- | ---------- |
+| **RVC**          | ~40-80ms | ✅            | 10 min      | ★★★★★   | MIT        |
+| **OpenVoice v2** | ~200ms   | ⚠️ Adaptable | 10-30 sec   | ★★★★    | Apache 2.0 |
+| **GPT-SoVITS**   | ~200ms   | ✅ Streaming  | 5 sec       | ★★★★★   | MIT        |
+| **CosyVoice 2**  | ~150ms   | ✅ Native     | Zero-shot   | ★★★★★   | Apache 2.0 |
+| **Fish Speech**  | ~150ms   | ✅            | 10-30 sec   | ★★★★    | Apache 2.0 |
+| **Kokoro**       | ~100ms   | ✅ Browser!   | Pre-trained | ★★★★    | Apache 2.0 |
+| **So-VITS-SVC**  | ~100ms   | ⚠️ Fork      | 30 min      | ★★★★★   | MIT        |
+| **Bark**         | 5-30s    | ❌            | Zero-shot   | ★★★★★   | MIT        |
+| **Tortoise-TTS** | 10-60s   | ❌            | 5 min       | ★★★★★   | Apache 2.0 |
 
 ## Appendix C: Commercial Metrics (aspirational — not v1 success gates)
 
 The former §15 table, kept as the bar a commercial launch would be judged against.
 Nothing in v1 measures these (no analytics, surveys, or automated quality scoring).
 
-| Metric | Target | Measurement |
-|--------|--------|-------------|
-| P95 voice latency | < 300ms | Server-side instrumentation *(the one row v1 does verify — §15 #2)* |
-| Voice similarity score | > 0.85 | Automated PESQ/POLQA comparison |
-| User retention (Day 7) | > 40% | Analytics |
-| Call completion rate | > 95% | Twilio + app metrics |
-| NPS Score | > 50 | User surveys |
-| Instant Clone success rate | > 90% | Model quality validation |
+| Metric                     | Target  | Measurement                                                         |
+| -------------------------- | ------- | ------------------------------------------------------------------- |
+| P95 voice latency          | < 300ms | Server-side instrumentation *(the one row v1 does verify — §15 #2)* |
+| Voice similarity score     | > 0.85  | Automated PESQ/POLQA comparison                                     |
+| User retention (Day 7)     | > 40%   | Analytics                                                           |
+| Call completion rate       | > 95%   | Twilio + app metrics                                                |
+| NPS Score                  | > 50    | User surveys                                                        |
+| Instant Clone success rate | > 90%   | Model quality validation                                            |

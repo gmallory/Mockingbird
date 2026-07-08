@@ -57,16 +57,16 @@ Mockingbird is a web application that captures your speech, transforms it into a
 
 ### Latency Budget (~172ms total)
 
-| Stage | Time |
-|-------|------|
-| Audio capture + buffering | 10ms |
-| Encoding (PCM → Int16) | 2ms |
-| Network upload (edge) | 20ms |
-| Server preprocessing | 5ms |
+| Stage                     | Time     |
+| ------------------------- | -------- |
+| Audio capture + buffering | 10ms     |
+| Encoding (PCM → Int16)    | 2ms      |
+| Network upload (edge)     | 20ms     |
+| Server preprocessing      | 5ms      |
 | **Model inference (GPU)** | **80ms** |
-| Server postprocessing | 5ms |
-| Network download | 20ms |
-| Decode + playback buffer | 30ms |
+| Server postprocessing     | 5ms      |
+| Network download          | 20ms     |
+| Decode + playback buffer  | 30ms     |
 
 ---
 
@@ -255,14 +255,14 @@ INFERENCE_BACKEND=cartesia uv run uvicorn app.main:app --reload  # Frontend with
 This project includes agent configuration files in the `agents/` directory that enable agentic AI systems to build, extend, and debug the entire codebase. See [agents/AGENTS.md](agents/AGENTS.md) for details.
 
 ### Agent Roles
-| Agent | Scope | File |
-|-------|-------|------|
-| **Orchestrator** | Full project coordination | `AGENTS.md` |
-| **Frontend** | FastAPI + Jinja2 + HTMX UI, templates, pages | `frontend.agent.md` |
-| **Audio Engine** | Web Audio API, AudioWorklet, WebSocket streaming | `audio-engine.agent.md` |
-| **Gateway** | Python (FastAPI) WebSocket gateway, auth, routing | `gateway.agent.md` |
-| **Inference** | Python ML service, RVC/OpenVoice, training pipeline | `inference.agent.md` |
-| **Infrastructure** | Docker, K8s, CI/CD, monitoring | `infrastructure.agent.md` |
+| Agent              | Scope                                               | File                      |
+| ------------------ | --------------------------------------------------- | ------------------------- |
+| **Orchestrator**   | Full project coordination                           | `AGENTS.md`               |
+| **Frontend**       | FastAPI + Jinja2 + HTMX UI, templates, pages        | `frontend.agent.md`       |
+| **Audio Engine**   | Web Audio API, AudioWorklet, WebSocket streaming    | `audio-engine.agent.md`   |
+| **Gateway**        | Python (FastAPI) WebSocket gateway, auth, routing   | `gateway.agent.md`        |
+| **Inference**      | Python ML service, RVC/OpenVoice, training pipeline | `inference.agent.md`      |
+| **Infrastructure** | Docker, K8s, CI/CD, monitoring                      | `infrastructure.agent.md` |
 
 ---
 

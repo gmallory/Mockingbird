@@ -76,14 +76,14 @@ when changing message shapes.
 
 This repo is meant to be built using the per-domain agent specs in `agents/`:
 
-| Agent | File | Scope |
-|-------|------|-------|
-| Orchestrator | `agents/AGENTS.md` | Shared contracts, env vars, build order |
-| Frontend | `agents/frontend.agent.md` | FastAPI + Jinja2 + HTMX app, server-rendered pages |
-| Audio Engine | `agents/audio-engine.agent.md` | AudioWorklet, ring buffer, WS client (browser JS glue) |
-| Gateway | `agents/gateway.agent.md` | Python (FastAPI) WS gateway, auth, routing |
-| Inference | `agents/inference.agent.md` | Python ML service, RVC/OpenVoice, training |
-| Infrastructure | `agents/infrastructure.agent.md` | Docker, K8s, CI/CD, monitoring |
+| Agent          | File                             | Scope                                                  |
+| -------------- | -------------------------------- | ------------------------------------------------------ |
+| Orchestrator   | `agents/AGENTS.md`               | Shared contracts, env vars, build order                |
+| Frontend       | `agents/frontend.agent.md`       | FastAPI + Jinja2 + HTMX app, server-rendered pages     |
+| Audio Engine   | `agents/audio-engine.agent.md`   | AudioWorklet, ring buffer, WS client (browser JS glue) |
+| Gateway        | `agents/gateway.agent.md`        | Python (FastAPI) WS gateway, auth, routing             |
+| Inference      | `agents/inference.agent.md`      | Python ML service, RVC/OpenVoice, training             |
+| Infrastructure | `agents/infrastructure.agent.md` | Docker, K8s, CI/CD, monitoring                         |
 
 Build order matters because later agents depend on contracts established earlier: **Infrastructure →
 Inference → Gateway → Audio Engine → Frontend**. When asked to implement a feature, read the corresponding
