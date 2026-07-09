@@ -46,26 +46,31 @@ class CloneError(Exception):
     """Instant clone failed for a reason the caller should surface verbatim."""
 
 
-def bake_tgt_se(template_path: Path, se: np.ndarray, out_path: Path) -> None:
-    """Write a copy of the converter template with ``tgt_se`` set to ``se``.
+def bake_tgt_se(
+    template_path: Path, se: np.ndarray, out_path: Path, tensor_name: str = TGT_SE_NAME
+) -> None:
+    """Write a copy of a template with its ``tensor_name`` initializer set to ``se``.
 
-    Also used once at export time to demote ``tgt_se`` from a required graph
-    input to an initializer default (exporting it as an input is what stops
-    constant folding from smearing the embedding into downstream weights).
+    Also used once at export time to demote a conditioning tensor from a
+    required graph input to an initializer default (exporting it as an input
+    is what stops constant folding from smearing the value into downstream
+    weights). ``tensor_name`` defaults to OpenVoice's ``tgt_se``; the M9 HD
+    pipeline (``app.export.hd_train``) reuses this same initializer-patch
+    machinery for its own conditioning tensor rather than duplicating it.
     """
     model = onnx.load(str(template_path))
     graph = model.graph
-    kept_inputs = [i for i in graph.input if i.name != TGT_SE_NAME]
+    kept_inputs = [i for i in graph.input if i.name != tensor_name]
     if len(kept_inputs) != len(graph.input):
         del graph.input[:]
         graph.input.extend(kept_inputs)
     for idx, init in enumerate(graph.initializer):
-        if init.name == TGT_SE_NAME:
+        if init.name == tensor_name:
             del graph.initializer[idx]
             break
     graph.initializer.append(
         onnx.helper.make_tensor(
-            TGT_SE_NAME, onnx.TensorProto.FLOAT, se.shape, se.astype(np.float32).tobytes(), raw=True
+            tensor_name, onnx.TensorProto.FLOAT, se.shape, se.astype(np.float32).tobytes(), raw=True
         )
     )
     onnx.save(model, str(out_path))
@@ -90,7 +95,7 @@ def _decode_wav(data: bytes) -> tuple[np.ndarray, int]:
     return audio, rate
 
 
-def _decode_ffmpeg(data: bytes) -> tuple[np.ndarray, int]:
+def _decode_ffmpeg(data: bytes, target_rate: int) -> tuple[np.ndarray, int]:
     if shutil.which("ffmpeg") is None:
         raise CloneError(
             "clip is not WAV and ffmpeg is not installed; "
@@ -108,28 +113,38 @@ def _decode_ffmpeg(data: bytes) -> tuple[np.ndarray, int]:
         "-ac",
         "1",
         "-ar",
-        str(OPENVOICE_SAMPLE_RATE),
+        str(target_rate),
         "pipe:1",
     ]
     proc = subprocess.run(cmd, input=data, capture_output=True, timeout=60)
     if proc.returncode != 0 or not proc.stdout:
         raise CloneError(f"ffmpeg could not decode the clip: {proc.stderr.decode()[:200]}")
-    return np.frombuffer(proc.stdout, dtype=np.float32).copy(), OPENVOICE_SAMPLE_RATE
+    return np.frombuffer(proc.stdout, dtype=np.float32).copy(), target_rate
 
 
-def decode_clip(data: bytes) -> np.ndarray:
-    """Decode an uploaded clip to float32 mono at ``OPENVOICE_SAMPLE_RATE``."""
+def decode_clip(
+    data: bytes, target_rate: int | None = None, min_seconds: float = MIN_CLIP_SECONDS
+) -> np.ndarray:
+    """Decode an uploaded clip to float32 mono at ``target_rate``.
+
+    ``target_rate`` defaults to ``OPENVOICE_SAMPLE_RATE`` (the instant-clone
+    path); the M9 HD training pipeline (``app.export.hd_train``) reuses this
+    same decoder with the deployment's configured
+    ``SELF_HOSTED_MODEL_SAMPLE_RATE`` instead, since one backend instance
+    loads both instant and HD models and they must share a sample rate.
+    """
+    rate_wanted = target_rate or OPENVOICE_SAMPLE_RATE
     if data[:4] == b"RIFF":
         audio, rate = _decode_wav(data)
     else:
-        audio, rate = _decode_ffmpeg(data)
-    if rate != OPENVOICE_SAMPLE_RATE:
+        audio, rate = _decode_ffmpeg(data, rate_wanted)
+    if rate != rate_wanted:
         # Same linear resample the streaming backend uses on the hot path.
         from app.backends.self_hosted import _resample
 
-        audio = _resample(audio, rate, OPENVOICE_SAMPLE_RATE)
-    if audio.size < int(MIN_CLIP_SECONDS * OPENVOICE_SAMPLE_RATE):
-        raise CloneError(f"clip is too short; record at least {MIN_CLIP_SECONDS:.0f}s of speech")
+        audio = _resample(audio, rate, rate_wanted)
+    if audio.size < int(min_seconds * rate_wanted):
+        raise CloneError(f"clip is too short; record at least {min_seconds:.0f}s of speech")
     return audio
 
 

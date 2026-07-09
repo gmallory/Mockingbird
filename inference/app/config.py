@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Cap on an uploaded clone clip so POST /voices (unauthenticated pre-M5) can't
     # be used to exhaust memory with an oversized body.
     max_clip_bytes: int = 10 * 1024 * 1024
+    # Same idea for POST /train_hd (M9): 10-30 minutes of reference audio is far
+    # bigger than an instant-clone sample (~300MB covers a 30-minute raw WAV at
+    # 22050Hz/16-bit mono; browser recordings are usually far smaller).
+    max_hd_clip_bytes: int = 300 * 1024 * 1024
 
     # Utterance segmentation (cartesia backend). Cartesia's voice changer is
     # clip-based, so we group input frames into utterances with a simple energy

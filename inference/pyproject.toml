@@ -29,7 +29,8 @@ dev = [
     "ruff>=0.15.20",
 ]
 # Offline model export only (scripts/export_openvoice_onnx.py + app/export/
-# openvoice*); the running service never needs torch.
+# openvoice*; scripts/export_rvc_onnx.py + app/export/rvc/, M9); the running
+# service never needs torch.
 export = [
     "torch>=2.12.1",
 ]

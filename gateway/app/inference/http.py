@@ -1,17 +1,20 @@
 """HTTP client for the inference service (off the hot path).
 
 The gRPC client in ``client.py`` carries the live audio stream; this thin httpx
-wrapper carries the one-shot voice-clone upload. The gateway ``POST /voices`` route
-proxies a recorded clip here, to the inference service, which owns the Cartesia
-key. On any transport or HTTP error this raises :class:`InferenceHTTPError` so the
-route returns a clean 502 instead of leaking httpx internals.
+wrapper carries one-shot uploads. The gateway ``POST /voices`` route proxies a
+recorded clip here, to the inference service, which owns the Cartesia key.
+``train_hd`` (M9) is the HD-training equivalent, called synchronously from the
+Celery worker (``app/training/tasks.py``), which has no event loop to run an
+async client in. On any transport or HTTP error both raise
+:class:`InferenceHTTPError` so the caller returns a clean 502/failed row
+instead of leaking httpx internals.
 """
 
 import httpx
 
 
 class InferenceHTTPError(Exception):
-    """The inference HTTP call failed; the route should surface a 502."""
+    """The inference HTTP call failed; the caller should surface it cleanly."""
 
 
 async def clone_voice(
@@ -39,4 +42,33 @@ async def clone_voice(
             # ValueError covers a 2xx with a non-JSON body (resp.json() raises
             # json.JSONDecodeError, a ValueError that is not an httpx.HTTPError);
             # fold it into the same clean 502 instead of leaking a 500.
+            raise InferenceHTTPError(str(exc)) from exc
+
+
+def train_hd(
+    base_url: str,
+    clip: bytes,
+    name: str,
+    transport: httpx.BaseTransport | None = None,
+) -> dict:
+    """POST a clip to inference ``/train_hd``; return the trained model's metadata.
+
+    Synchronous (``httpx.Client``, not ``AsyncClient``): called from the Celery
+    training worker, which runs outside any event loop. Timeout is generous —
+    a real GPU fine-tune can run long (PRODUCT_SPEC §4.2: 30min-2hrs); the
+    torch-free synthetic stand-in inference falls back to returns in well
+    under a second.
+    """
+    files = {"clip": ("clip.wav", clip, "application/octet-stream")}
+    data = {"name": name}
+    with httpx.Client(
+        base_url=base_url,
+        transport=transport,
+        timeout=httpx.Timeout(600.0, connect=10.0),
+    ) as client:
+        try:
+            resp = client.post("/train_hd", files=files, data=data)
+            resp.raise_for_status()
+            return resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
             raise InferenceHTTPError(str(exc)) from exc

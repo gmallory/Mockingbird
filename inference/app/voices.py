@@ -44,17 +44,20 @@ def _require_cartesia() -> None:
         raise HTTPException(status_code=400, detail="CARTESIA_API_KEY is not set")
 
 
-async def _read_clip(clip: UploadFile) -> bytes:
-    """Read the upload in chunks, aborting once it exceeds ``max_clip_bytes``.
+async def _read_clip(clip: UploadFile, max_bytes: int | None = None) -> bytes:
+    """Read the upload in chunks, aborting once it exceeds ``max_bytes``.
 
     Bounds memory use regardless of what (if anything) the client's Content-Length
-    header claims — this route is unauthenticated pre-M5.
+    header claims — this route is unauthenticated pre-M5. ``max_bytes`` defaults
+    to ``settings.max_clip_bytes``; ``POST /train_hd`` (M9, ``app/training.py``)
+    reuses this same helper with the much larger ``max_hd_clip_bytes``.
     """
+    limit = max_bytes if max_bytes is not None else settings.max_clip_bytes
     chunks: list[bytes] = []
     total = 0
     while chunk := await clip.read(1 << 16):
         total += len(chunk)
-        if total > settings.max_clip_bytes:
+        if total > limit:
             raise HTTPException(status_code=413, detail="clip exceeds max_clip_bytes")
         chunks.append(chunk)
     return b"".join(chunks)

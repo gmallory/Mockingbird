@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # Cap on an uploaded clone clip so POST /voices can't be used to exhaust
     # memory with an oversized body.
     max_clip_bytes: int = 10 * 1024 * 1024
+    # Same idea for the HD training clip (M9): 10-30 minutes of audio is far
+    # bigger than an instant-clone sample (~300MB covers a 30-minute raw WAV
+    # at 22050Hz/16-bit mono; browser recordings are usually far smaller).
+    max_hd_clip_bytes: int = 300 * 1024 * 1024
 
     # === Auth (M6a) — Supabase-hosted ===
     # The gateway never mints tokens; Supabase (GoTrue) does. These drive two
@@ -78,6 +82,22 @@ class Settings(BaseSettings):
     # never voice conversion); flip this on to reject any tokenless connection with
     # WS close 4001. An invalid/expired token is rejected regardless of this flag.
     ws_require_auth: bool = False
+
+    # === HD Clone training (M9) — Celery + Redis job queue ===
+    # POST /api/voices/{id}/train enqueues a Celery task that drives the
+    # PRODUCT_SPEC §4.2 pipeline (validation -> preprocessing ->
+    # feature_extraction -> training -> export) and calls the inference
+    # service's POST /train_hd for the heavy step. Feature-flagged like calling
+    # (ENABLE_CALLING) — off returns a clean 503, the rest of the app unaffected.
+    enable_training: bool = True
+    # Empty -> reuse redis_url for both (the common case); set these only to
+    # point training at a different Redis instance than sessions/rate-limiting.
+    celery_broker_url: str = ""
+    celery_result_backend: str = ""
+    # Tests run the pipeline synchronously with no live worker/broker (Celery's
+    # "eager" mode: task_always_eager + task_eager_propagates). Production
+    # leaves this off and runs `celery -A app.training.celery_app worker`.
+    celery_task_always_eager: bool = False
 
 
 settings = Settings()
