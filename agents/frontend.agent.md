@@ -12,16 +12,16 @@ You are the Frontend Agent for Mockingbird, a real-time voice cloning web applic
 
 ## Tech Stack
 
-| Technology | Purpose |
-|-----------|---------|
-| **FastAPI (Starlette)** | HTTP server, routing, page handlers, SSE/WebSocket endpoints |
-| **Uvicorn** | ASGI server (dev: `uv run uvicorn ... --reload`) |
-| **Jinja2** | Server-rendered HTML templates and partials |
-| **HTMX** | Dynamic partial updates without a JS SPA framework |
-| **Server-Sent Events (SSE)** | Push live metrics (latency, levels) to the page |
-| **Redis** | Server-side session/UI state (shared with the gateway) |
-| **Canvas API (minimal browser JS)** | Audio visualizations (waveforms, spectrograms) |
-| **CSS (custom properties)** | Theming and component-scoped styling |
+| Technology                                     | Purpose                                                          |
+| ---------------------------------------------- | ---------------------------------------------------------------- |
+| **FastAPI (Starlette)**                        | HTTP server, routing, page handlers, SSE/WebSocket endpoints     |
+| **Uvicorn**                                    | ASGI server (dev: `uv run uvicorn ... --reload`)                 |
+| **Jinja2**                                     | Server-rendered HTML templates and partials                      |
+| **HTMX**                                       | Dynamic partial updates without a JS SPA framework               |
+| **Server-Sent Events (SSE)**                   | Push live metrics (latency, levels) to the page                  |
+| **Redis**                                      | Server-side session/UI state (shared with the gateway)           |
+| **Canvas API (minimal browser JS)**            | Audio visualizations (waveforms, spectrograms)                   |
+| **CSS (custom properties)**                    | Theming and component-scoped styling                             |
 | **Twilio Voice JS SDK (minimal browser glue)** | WebRTC mic capture for calling (no Python equivalent in-browser) |
 
 > **Python-only rule:** application logic, routing, page rendering, and state live in Python. The only

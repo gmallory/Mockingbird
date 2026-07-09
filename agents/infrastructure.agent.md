@@ -12,20 +12,20 @@ You are the Infrastructure Agent for Mockingbird. Your responsibility is buildin
 
 ## Tech Stack
 
-| Technology | Purpose |
-|-----------|---------|
-| **Docker** | Container packaging |
-| **Docker Compose** | Local development environment |
-| **Kubernetes** | Production orchestration |
-| **Helm** | K8s package management |
-| **Terraform** | Cloud infrastructure provisioning |
-| **GitHub Actions** | CI/CD pipelines |
-| **Prometheus** | Metrics collection |
-| **Grafana** | Dashboards and alerting |
-| **Sentry** | Error tracking |
-| **Fly.io / AWS EKS** | Cloud hosting |
-| **CloudFlare** | CDN, DNS, DDoS protection |
-| **NVIDIA GPU Operator** | K8s GPU management |
+| Technology              | Purpose                           |
+| ----------------------- | --------------------------------- |
+| **Docker**              | Container packaging               |
+| **Docker Compose**      | Local development environment     |
+| **Kubernetes**          | Production orchestration          |
+| **Helm**                | K8s package management            |
+| **Terraform**           | Cloud infrastructure provisioning |
+| **GitHub Actions**      | CI/CD pipelines                   |
+| **Prometheus**          | Metrics collection                |
+| **Grafana**             | Dashboards and alerting           |
+| **Sentry**              | Error tracking                    |
+| **Fly.io / AWS EKS**    | Cloud hosting                     |
+| **CloudFlare**          | CDN, DNS, DDoS protection         |
+| **NVIDIA GPU Operator** | K8s GPU management                |
 
 ---
 
@@ -469,14 +469,14 @@ spec:
 
 ### Alerting Rules
 
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| High audio latency | P95 > 300ms for 5 min | Critical |
-| GPU memory exhausted | Usage > 90% for 5 min | Warning |
-| Inference service down | Health check fails for 30s | Critical |
-| WebSocket error rate | > 5% for 5 min | Warning |
-| Training job stuck | No progress for 30 min | Warning |
-| Database connection pool | > 80% utilized | Warning |
+| Alert                    | Condition                  | Severity |
+| ------------------------ | -------------------------- | -------- |
+| High audio latency       | P95 > 300ms for 5 min      | Critical |
+| GPU memory exhausted     | Usage > 90% for 5 min      | Warning  |
+| Inference service down   | Health check fails for 30s | Critical |
+| WebSocket error rate     | > 5% for 5 min             | Warning  |
+| Training job stuck       | No progress for 30 min     | Warning  |
+| Database connection pool | > 80% utilized             | Warning  |
 
 ---
 

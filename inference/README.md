@@ -9,12 +9,12 @@ once the speaker pauses.
 
 The actual transform is chosen at startup by `INFERENCE_BACKEND`:
 
-| Backend       | What it does                                         |
-|---------------|------------------------------------------------------|
-| `passthrough` | Returns audio unchanged, one frame out per frame in. The default; proves the gRPC hop and lets us measure loop latency with zero model cost. |
+| Backend       | What it does                                                                                                                                                                                                                                                                                                                                                    |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `passthrough` | Returns audio unchanged, one frame out per frame in. The default; proves the gRPC hop and lets us measure loop latency with zero model cost.                                                                                                                                                                                                                    |
 | `cartesia`    | Real cloud voice changer, no GPU. Cartesia's voice changer is clip-based, so this backend groups frames into utterances with a simple energy VAD and converts each on a trailing pause via `/voice-changer/sse` (walkie-talkie feel, not per-frame streaming). Requires `CARTESIA_API_KEY` and a target voice (`CARTESIA_VOICE_ID` or a per-session `modelId`). |
-| `self_hosted` | **Primary engine.** Block-streaming ONNX Runtime voice conversion (M5a) running exported OpenVoice V2 weights (M5b): 60ms blocks + 140ms left context per inference, 5ms seam crossfade, per-voice `{model_id}.onnx` files from `SELF_HOSTED_MODEL_DIR` or S3. |
-| `cloud_gpu`   | The exact same backend, deployed on a rented GPU box (see `../infrastructure/scripts/provision_cloud_gpu.sh`); the gateway dials that box's gRPC endpoint. |
+| `self_hosted` | **Primary engine.** Block-streaming ONNX Runtime voice conversion (M5a) running exported OpenVoice V2 weights (M5b): 60ms blocks + 140ms left context per inference, 5ms seam crossfade, per-voice `{model_id}.onnx` files from `SELF_HOSTED_MODEL_DIR` or S3.                                                                                                  |
+| `cloud_gpu`   | The exact same backend, deployed on a rented GPU box (see `../infrastructure/scripts/provision_cloud_gpu.sh`); the gateway dials that box's gRPC endpoint.                                                                                                                                                                                                      |
 
 ## Run
 

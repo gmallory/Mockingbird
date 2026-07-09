@@ -29,14 +29,14 @@ You are the Audio Engine Agent for Mockingbird. Your responsibility is building 
 
 ## Tech Stack
 
-| Technology | Purpose |
-|-----------|---------|
-| **Web Audio API** | AudioContext, AudioWorkletNode, MediaStream integration |
-| **AudioWorkletProcessor** | Real-time audio capture and playback (dedicated thread) |
-| **SharedArrayBuffer** | Zero-copy audio data sharing between threads |
-| **Web Workers** | WebSocket connection management off main thread |
+| Technology                  | Purpose                                                                   |
+| --------------------------- | ------------------------------------------------------------------------- |
+| **Web Audio API**           | AudioContext, AudioWorkletNode, MediaStream integration                   |
+| **AudioWorkletProcessor**   | Real-time audio capture and playback (dedicated thread)                   |
+| **SharedArrayBuffer**       | Zero-copy audio data sharing between threads                              |
+| **Web Workers**             | WebSocket connection management off main thread                           |
 | **JavaScript (ES modules)** | Plain browser JS — no build/emit step, served as static assets by FastAPI |
-| **JSDoc + `// @ts-check`** | Type checking with no compile step — shipped files stay plain `.js` |
+| **JSDoc + `// @ts-check`**  | Type checking with no compile step — shipped files stay plain `.js`       |
 
 ---
 
@@ -343,13 +343,13 @@ function sendAudio(data) {
 
 ### Buffer Sizing
 
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| Render quantum | 128 samples | Fixed by Web Audio spec |
-| Capture chunk | 960 samples (20ms) | Good balance of latency vs overhead |
-| Playback jitter buffer | 4800 samples (100ms) | Absorbs network jitter |
-| WebSocket send interval | 20ms | Matches capture chunk size |
-| Ring buffer capacity | 48000 samples (1 second) | Handles burst traffic |
+| Parameter               | Value                    | Rationale                           |
+| ----------------------- | ------------------------ | ----------------------------------- |
+| Render quantum          | 128 samples              | Fixed by Web Audio spec             |
+| Capture chunk           | 960 samples (20ms)       | Good balance of latency vs overhead |
+| Playback jitter buffer  | 4800 samples (100ms)     | Absorbs network jitter              |
+| WebSocket send interval | 20ms                     | Matches capture chunk size          |
+| Ring buffer capacity    | 48000 samples (1 second) | Handles burst traffic               |
 
 ### Latency Optimization
 
@@ -363,14 +363,14 @@ function sendAudio(data) {
 
 ## Error Handling
 
-| Error | Recovery |
-|-------|----------|
-| Microphone permission denied | Show permission dialog, degrade gracefully |
-| WebSocket disconnected | Auto-reconnect with exponential backoff (1s, 2s, 4s, max 30s) |
-| Audio underrun (playback buffer empty) | Output silence, log metrics |
-| Audio overrun (buffer full) | Drop oldest samples, log metrics |
-| SharedArrayBuffer not available | Fallback to postMessage (higher latency) |
-| AudioContext suspended | Call `audioContext.resume()` on user interaction |
+| Error                                  | Recovery                                                      |
+| -------------------------------------- | ------------------------------------------------------------- |
+| Microphone permission denied           | Show permission dialog, degrade gracefully                    |
+| WebSocket disconnected                 | Auto-reconnect with exponential backoff (1s, 2s, 4s, max 30s) |
+| Audio underrun (playback buffer empty) | Output silence, log metrics                                   |
+| Audio overrun (buffer full)            | Drop oldest samples, log metrics                              |
+| SharedArrayBuffer not available        | Fallback to postMessage (higher latency)                      |
+| AudioContext suspended                 | Call `audioContext.resume()` on user interaction              |
 
 ---
 

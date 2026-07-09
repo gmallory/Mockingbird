@@ -12,18 +12,18 @@ You are the Gateway Agent for Mockingbird. Your responsibility is building the *
 
 ## Tech Stack
 
-| Technology | Purpose |
-|-----------|---------|
-| **Python 3.14** | Runtime |
-| **FastAPI** | HTTP framework (REST API endpoints) |
-| **Starlette WebSockets** | WebSocket upgrade handling |
-| **Uvicorn** | ASGI server |
-| **gRPC (grpcio / grpcio-tools)** | Communication with inference service |
-| **Redis (redis-py, asyncio)** | Session store, pub/sub, rate limiting |
+| Technology                                   | Purpose                               |
+| -------------------------------------------- | ------------------------------------- |
+| **Python 3.14**                              | Runtime                               |
+| **FastAPI**                                  | HTTP framework (REST API endpoints)   |
+| **Starlette WebSockets**                     | WebSocket upgrade handling            |
+| **Uvicorn**                                  | ASGI server                           |
+| **gRPC (grpcio / grpcio-tools)**             | Communication with inference service  |
+| **Redis (redis-py, asyncio)**                | Session store, pub/sub, rate limiting |
 | **PostgreSQL (SQLModel / SQLAlchemy async)** | User data, voice models, call history |
-| **JWT (PyJWT)** | Authentication |
-| **structlog** | Structured logging |
-| **pytest** | Testing |
+| **JWT (PyJWT)**                              | Authentication                        |
+| **structlog**                                | Structured logging                    |
+| **pytest**                                   | Testing                               |
 
 ---
 
@@ -379,14 +379,14 @@ class CallRecord(SQLModel, table=True):
 
 ## Error Handling
 
-| Error | HTTP/WS Code | Recovery |
-|-------|-------------|----------|
-| Invalid JWT | 401 / WS close 4001 | Client re-authenticates |
-| Rate limit exceeded | 429 / WS close 4029 | Client waits, retries |
-| Model not found | 404 / WS error msg | Client selects different model |
+| Error                         | HTTP/WS Code        | Recovery                                        |
+| ----------------------------- | ------------------- | ----------------------------------------------- |
+| Invalid JWT                   | 401 / WS close 4001 | Client re-authenticates                         |
+| Rate limit exceeded           | 429 / WS close 4029 | Client waits, retries                           |
+| Model not found               | 404 / WS error msg  | Client selects different model                  |
 | Inference service unavailable | 503 / WS close 4503 | Failover to another worker, or passthrough mode |
-| WebSocket connection dropped | WS close 1006 | Client auto-reconnects |
-| gRPC stream error | Internal | Retry with backoff, failover worker |
+| WebSocket connection dropped  | WS close 1006       | Client auto-reconnects                          |
+| gRPC stream error             | Internal            | Retry with backoff, failover worker             |
 
 ### Graceful Degradation
 When all inference workers are unavailable:

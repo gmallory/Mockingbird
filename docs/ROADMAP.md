@@ -11,25 +11,27 @@ Before starting a milestone, read this file plus the relevant `agents/*.agent.md
 
 ## Status at a glance
 
-| Milestone | Scope | State |
-|-----------|-------|-------|
-| M1 | Vertical echo slice (mic → WS → gateway echo → playback) | done (#6) |
-| M2 | Data foundation (Postgres + Redis, wired to `/healthz`) | done (#7, #9) |
-| M3 | gRPC proxy + swappable backend (passthrough / cartesia) | done (#8) |
-| M4 | First real voice transform + clone-your-voice | done |
-| → M4a | VAD-segmented Cartesia conversion | done (#10) |
-| → M4b | Voice cloning + `voices` registry | done (#11, #13) |
-| → M4c | Voice Studio UI + voice selection | done (#14) |
-| **M5** | **Self-hosted GPU backend (RVC/OpenVoice) — primary engine** | **in progress** |
-| → M5a | Streaming ONNX engine + `cloud_gpu` mode + latency benchmark | done |
-| → M5b | Real voice weights (OpenVoice V2 ONNX export) + instant clone + tuning | done (local); GPU bench run pending |
-| **M6** | **Auth (Supabase) + multi-user voice library** | **done** |
-| → M6a | Supabase token verification + `/auth` proxy + per-user `/voices` + login UI | done |
-| → M6b | Auth on the `/ws/voice` socket + per-user rate limiting | done |
-| **M7** | **Infra / CI hardening (GitHub Actions CI + Prometheus/Grafana)** | **done** |
-| **M8** | **Calling — Twilio PSTN (PRODUCT_SPEC Phase 2)** | **in progress** |
-| → M8a | Outbound PSTN calls + media-stream bridge + dialer UI | done (local); live Twilio run pending |
-| → M8b | Inbound calls, recording, WebRTC peer calls | pending |
+| Milestone | Scope                                                                       | State                                         |
+| --------- | --------------------------------------------------------------------------- | --------------------------------------------- |
+| M1        | Vertical echo slice (mic → WS → gateway echo → playback)                    | done (#6)                                     |
+| M2        | Data foundation (Postgres + Redis, wired to `/healthz`)                     | done (#7, #9)                                 |
+| M3        | gRPC proxy + swappable backend (passthrough / cartesia)                     | done (#8)                                     |
+| M4        | First real voice transform + clone-your-voice                               | done                                          |
+| → M4a     | VAD-segmented Cartesia conversion                                           | done (#10)                                    |
+| → M4b     | Voice cloning + `voices` registry                                           | done (#11, #13)                               |
+| → M4c     | Voice Studio UI + voice selection                                           | done (#14)                                    |
+| **M5**    | **Self-hosted GPU backend (RVC/OpenVoice) — primary engine**                | **in progress**                               |
+| → M5a     | Streaming ONNX engine + `cloud_gpu` mode + latency benchmark                | done                                          |
+| → M5b     | Real voice weights (OpenVoice V2 ONNX export) + instant clone + tuning      | done (local); GPU bench run pending           |
+| **M6**    | **Auth (Supabase) + multi-user voice library**                              | **done**                                      |
+| → M6a     | Supabase token verification + `/auth` proxy + per-user `/voices` + login UI | done                                          |
+| → M6b     | Auth on the `/ws/voice` socket + per-user rate limiting                     | done                                          |
+| **M7**    | **Infra / CI hardening (GitHub Actions CI + Prometheus/Grafana)**           | **done**                                      |
+| **M8**    | **Calling — Twilio PSTN (PRODUCT_SPEC Phase 2, outbound cut)**              | **in progress**                               |
+| → M8a     | Outbound PSTN calls + media-stream bridge + dialer UI                       | done (local); live Twilio run pending         |
+| → M8b     | Inbound calls, recording, WebRTC peer calls, contacts                       | **descoped** (2026-07-07 — future/commercial) |
+| **M9**    | **HD Clone tier — RVC training + single-graph ONNX export**                 | pending                                       |
+| **M10**   | **UI completion (Dashboard, Settings, fine-tune, meters) + v1 sign-off**    | pending                                       |
 
 ## Backend priority (owner decision, 2026-07-04)
 
@@ -39,6 +41,20 @@ a target rather than a measured fact. **Cartesia (`cartesia`) and cloud-hosted G
 (`cloud_gpu`, planned) are separate, selectable modes** — not fallbacks, not the spine.
 This supersedes the earlier "no-GPU clip spine primary / GPU optional tier" framing from
 the 2026-06-30 interview and is why self-hosted work is promoted to M5, ahead of auth.
+
+## Definition of success (owner decision, 2026-07-07)
+
+Mockingbird v1 is a **demo-ready portfolio piece**. The binding success criteria are
+**[PRODUCT_SPEC §15](PRODUCT_SPEC.md)** — live cloned phone call, GPU-measured latency
+inside budget, listening-check clone quality, HD tier, complete UI, green CI, current
+docs. Scope settled the same day:
+
+- **In scope:** HD Clone tier (RVC) → **M9**; remaining UI pages (Dashboard, Settings,
+  fine-tune controls, similarity meter, waveform viz) → **M10**.
+- **Descoped to future/commercial:** inbound calls, call recording, WebRTC peer calls,
+  contacts, model export/sharing, A/B testing, billing, K8s/edge scaling (full list in
+  PRODUCT_SPEC §13).
+- **Order of remaining work:** M5 GPU bench → M8a live-Twilio run → M9 → M10 (sign-off).
 
 ---
 
@@ -428,12 +444,13 @@ fed by Prometheus scraping both services' `/metrics`.
 
 ### M8 — Calling (PRODUCT_SPEC Phase 2) — IN PROGRESS (M8a done locally)
 
-Twilio PSTN calling, dialer UI with history, mid-call model switching, call
-recording. Split: **M8a** = outbound calls end-to-end (landed); **M8b** = inbound
-calls, recording, WebRTC peer calls, contacts.
+Twilio PSTN calling, dialer UI with history, mid-call model switching. Split:
+**M8a** = outbound calls end-to-end (landed); **M8b** = inbound calls, recording,
+WebRTC peer calls, contacts — **descoped 2026-07-07** (future/commercial).
 
 Mapping to PRODUCT_SPEC §13: M4 + M5 complete Phase 1 (MVP, including the GPU path);
-M6 adds auth; M7 is the deployment/observability cut of Phase 1; M8 begins Phase 2.
+M6 adds auth; M7 is the deployment/observability cut of Phase 1; M8a is the in-scope
+cut of Phase 2; M9/M10 close v1.
 
 ### M8a — Outbound PSTN + media-stream bridge + dialer — DONE (local)
 
@@ -483,9 +500,53 @@ real call from `/dialer`, confirm two-way audio and that the status callback clo
 the record. Latency note: the PSTN leg adds Twilio's own transport on top of the
 existing conversion budget; measure during the live run.
 
-### M8b — Inbound calls, recording, peer calls — PENDING
+### M8b — Inbound calls, recording, peer calls — DESCOPED (2026-07-07)
 
-Inbound (dedicated Twilio number → `CallDirection.INBOUND`), call recording
-(original + transformed, consent language per PRODUCT_SPEC §4.3), browser↔browser
-WebRTC calls, contacts. Also: Redis-backed bridge routing if the gateway ever runs
-more than one replica.
+Out of v1 scope (owner decision — see "Definition of success" above). Kept as the
+future/commercial sketch: inbound (dedicated Twilio number → `CallDirection.INBOUND`),
+call recording (original + transformed, consent language per PRODUCT_SPEC §4.3),
+browser↔browser WebRTC calls, contacts. Also: Redis-backed bridge routing if the
+gateway ever runs more than one replica.
+
+### M9 — HD Clone tier (RVC) — PENDING
+
+**Goal:** the PRODUCT_SPEC §4.2 second tier — fine-tuned RVC voices that beat the
+instant clone, behind the **same** `BackendSession` / M5a ONNX contract (backend swap
+only; no WS/gRPC change). This is the "M5c candidate" deferred in M5b, now scheduled.
+Sketch only — write the detailed spec when picking it up, and spike the export first:
+it is the risk item.
+
+- **Single-graph export (the hard part):** compose HuBERT content encoding + F0
+  estimation + the RVC synthesizer into one audio-in/audio-out ONNX graph
+  (float32 `[1, N]` @ `SELF_HOSTED_MODEL_SAMPLE_RATE`, M5a contract). Follow the
+  M5b pattern (`inference/app/export/`, torch only in the export group).
+- **Training pipeline:** Celery + Redis job queue (PRODUCT_SPEC §5): upload →
+  preprocess → fine-tune base RVC on the GPU box → export ONNX → register as a
+  `voices` row. Introduces the `VoiceModel` shape (PRODUCT_SPEC §6) for status/artifacts.
+- **API:** `POST /api/voices/{id}/train` + `GET /api/voices/{id}/train/status`
+  (PRODUCT_SPEC §7 planned table).
+- **UI:** training progress in the Studio (progress bar + ETA).
+- Needs the rented GPU box — the M5 `provision_cloud_gpu.sh` script covers it; run the
+  M5 bench first.
+
+**Done when:** a 10–30 min sample fine-tunes to an RVC voice that streams through
+`self_hosted` end-to-end and beats the instant clone of the same speaker in a
+side-by-side listening check (PRODUCT_SPEC §15 criterion 4).
+
+### M10 — UI completion + v1 sign-off — PENDING
+
+**Goal:** close PRODUCT_SPEC §4.5 and run the §15 checklist. Last milestone of v1.
+
+- **Dashboard**: overview page — active voice, recent calls, quick-start links.
+  (Monitor currently holds `/`; decide whether Dashboard takes `/` and Monitor moves.)
+- **Settings**: audio I/O config, quality presets, account — backed by the existing
+  `User.settings` JSON column.
+- **Fine-tune controls:** pitch offset / speed / breathiness per voice
+  (`PATCH /api/voices/{id}`), applied in the self-hosted streaming session — the DSP
+  hook into `BlockStreamSession` needs its own mini-spike.
+- **Monitor polish:** waveform visualizer (level meters exist today), voice similarity
+  meter, explicit transform on/off toggle. Mute/hold/volume on the dialer.
+- **v1 sign-off:** walk PRODUCT_SPEC §15, record results + measured numbers in the
+  README as the portfolio writeup.
+
+**Done when:** every §15 criterion is Pass and the README carries the writeup.

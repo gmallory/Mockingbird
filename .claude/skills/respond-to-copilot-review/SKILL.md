@@ -126,10 +126,10 @@ Do not be deferential for its own sake.
 Pushing commits and posting replies are outward-facing and awkward to undo, so they
 need an explicit go-ahead. Present one scannable summary and then wait:
 
-| # | path:line | Verdict | Fix made | Draft reply |
-|---|-----------|---------|----------|-------------|
-| 1 | `file:18` | Fix | added MultiEdit to matcher | "Added MultiEdit to the matcher so those edits hit the same hooks." |
-| 2 | `file:36` | Push back | none | "Intentional. uv pip is allowed on purpose (line 34)." |
+| #   | path:line | Verdict   | Fix made                   | Draft reply                                                         |
+| --- | --------- | --------- | -------------------------- | ------------------------------------------------------------------- |
+| 1   | `file:18` | Fix       | added MultiEdit to matcher | "Added MultiEdit to the matcher so those edits hit the same hooks." |
+| 2   | `file:36` | Push back | none                       | "Intentional. uv pip is allowed on purpose (line 34)."              |
 
 Say plainly that the code edits exist locally but **nothing has been pushed or
 posted**, and ask whether to proceed. Let the user amend any verdict or reply first.
@@ -157,10 +157,10 @@ gh api graphql -f query='
 
 ## Command reference
 
-| Need | Command |
-|------|---------|
-| Current branch's PR | `gh pr view --json number,url` |
-| Request Copilot review + wait | `.claude/skills/respond-to-copilot-review/scripts/request_copilot_review.sh [PR]` |
-| Unresolved Copilot threads (JSON) | `.claude/skills/respond-to-copilot-review/scripts/list_copilot_threads.sh [PR]` |
-| Reply to a comment | `gh api --method POST repos/{owner}/{repo}/pulls/{PR}/comments/{COMMENT_ID}/replies -f body='…'` |
-| Resolve a thread | `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' -f t='THREAD_ID'` |
+| Need                              | Command                                                                                                                     |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Current branch's PR               | `gh pr view --json number,url`                                                                                              |
+| Request Copilot review + wait     | `.claude/skills/respond-to-copilot-review/scripts/request_copilot_review.sh [PR]`                                           |
+| Unresolved Copilot threads (JSON) | `.claude/skills/respond-to-copilot-review/scripts/list_copilot_threads.sh [PR]`                                             |
+| Reply to a comment                | `gh api --method POST repos/{owner}/{repo}/pulls/{PR}/comments/{COMMENT_ID}/replies -f body='…'`                            |
+| Resolve a thread                  | `gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' -f t='THREAD_ID'` |

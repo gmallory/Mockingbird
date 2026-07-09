@@ -42,13 +42,13 @@ Each agent can work independently but should respect shared interfaces (API cont
 
 ## Agent Overview
 
-| Agent | File | Scope | Primary Language |
-|-------|------|-------|-----------------|
-| **Frontend** | `frontend.agent.md` | FastAPI + Jinja2 + HTMX app, templates, pages, routing | Python |
-| **Audio Engine** | `audio-engine.agent.md` | Web Audio API, AudioWorklet, WebSocket streaming, ring buffers | JavaScript (browser glue) |
-| **Gateway** | `gateway.agent.md` | WebSocket connection management, auth, model routing | Python |
-| **Inference** | `inference.agent.md` | ML model serving, RVC/OpenVoice, training, voice conversion | Python |
-| **Infrastructure** | `infrastructure.agent.md` | Docker, Kubernetes, CI/CD, monitoring, deployment | YAML/HCL |
+| Agent              | File                      | Scope                                                          | Primary Language          |
+| ------------------ | ------------------------- | -------------------------------------------------------------- | ------------------------- |
+| **Frontend**       | `frontend.agent.md`       | FastAPI + Jinja2 + HTMX app, templates, pages, routing         | Python                    |
+| **Audio Engine**   | `audio-engine.agent.md`   | Web Audio API, AudioWorklet, WebSocket streaming, ring buffers | JavaScript (browser glue) |
+| **Gateway**        | `gateway.agent.md`        | WebSocket connection management, auth, model routing           | Python                    |
+| **Inference**      | `inference.agent.md`      | ML model serving, RVC/OpenVoice, training, voice conversion    | Python                    |
+| **Infrastructure** | `infrastructure.agent.md` | Docker, Kubernetes, CI/CD, monitoring, deployment              | YAML/HCL                  |
 
 ---
 
