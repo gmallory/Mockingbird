@@ -26,6 +26,8 @@ const BASE = "/static/js/audio-engine";
  * @property {boolean} [enableNoiseSuppression]
  * @property {boolean} [enableEchoCancellation]
  * @property {boolean} [enableAutoGainControl]
+ * @property {string | null} [inputDeviceId] preferred mic (Settings, M10); falls back to the system default
+ * @property {string | null} [outputDeviceId] preferred speaker (M10, best-effort — see start())
  */
 
 export class AudioEngine {
@@ -37,6 +39,8 @@ export class AudioEngine {
       enableNoiseSuppression: true,
       enableEchoCancellation: true,
       enableAutoGainControl: true,
+      inputDeviceId: null,
+      outputDeviceId: null,
       ...config,
     };
 
@@ -47,10 +51,22 @@ export class AudioEngine {
     this.captureNode = null;
     this.playbackNode = null;
     this.sourceNode = null;
+    /** @type {GainNode | null} output volume control (M10) */
+    this.outputGainNode = null;
+    /** @type {AnalyserNode | null} waveform taps (M10 Monitor visualizer) */
+    this.inputAnalyser = null;
+    /** @type {AnalyserNode | null} */
+    this.outputAnalyser = null;
     /** @type {Worker | null} */
     this.wsWorker = null;
 
     this.transformEnabled = true;
+    // Independent gates (M10): muted stops only the mic; onHold stops both
+    // directions locally (see setMuted/setHold). Combined in _applyCaptureGate
+    // so toggling one never silently overrides the other.
+    this.muted = false;
+    this.onHold = false;
+    this._volume = 1.0;
     this.latency = new LatencyTracker();
     this.inputLevel = new LevelSmoother();
     this.outputLevel = new LevelSmoother();
@@ -100,6 +116,10 @@ export class AudioEngine {
         noiseSuppression: this.config.enableNoiseSuppression,
         echoCancellation: this.config.enableEchoCancellation,
         autoGainControl: this.config.enableAutoGainControl,
+        // Settings (M10): a specific mic, when the caller resolved one from
+        // GET /api/settings. Omitted entirely (not even as undefined) when
+        // unset, so the browser's own default-device behavior is unchanged.
+        ...(this.config.inputDeviceId ? { deviceId: { exact: this.config.inputDeviceId } } : {}),
       },
     });
 
@@ -108,6 +128,17 @@ export class AudioEngine {
       latencyHint: "interactive",
     });
     if (this.audioContext.state === "suspended") await this.audioContext.resume();
+
+    // Best-effort output device routing (Settings, M10). setSinkId is
+    // Chromium-only as of this writing; guarded so Firefox/Safari just keep
+    // the system default output with no error surfaced.
+    if (this.config.outputDeviceId && typeof this.audioContext.setSinkId === "function") {
+      try {
+        await this.audioContext.setSinkId(this.config.outputDeviceId);
+      } catch (err) {
+        this._emit("error", `Could not switch output device: ${err?.message || err}`);
+      }
+    }
 
     await this.audioContext.audioWorklet.addModule(`${BASE}/processors/voice-capture.worklet.js`);
     await this.audioContext.audioWorklet.addModule(`${BASE}/processors/voice-playback.worklet.js`);
@@ -129,10 +160,27 @@ export class AudioEngine {
     });
     this.playbackNode.port.onmessage = (e) => this._onPlaybackMessage(e.data);
 
+    // Output volume control (Dialer, M10): a GainNode between playback and the
+    // destination. Native Web Audio node, not a JS callback -- zero-allocation
+    // on the render thread. Restores whatever setVolume() was last called
+    // with (or 1.0), so a value set before start() still applies.
+    this.outputGainNode = this.audioContext.createGain();
+    this.outputGainNode.gain.value = this._volume;
+
+    // Waveform taps (Monitor, M10): AnalyserNode fan-out alongside the
+    // existing connections below -- connect() adds an edge, it doesn't
+    // replace one, so this changes nothing about what reaches the speakers.
+    this.inputAnalyser = this.audioContext.createAnalyser();
+    this.inputAnalyser.fftSize = 1024;
+    this.outputAnalyser = this.audioContext.createAnalyser();
+    this.outputAnalyser.fftSize = 1024;
+
     // Capture node writes no output (stays silent), but routing it to the
     // destination keeps it pulled by the render graph. Playback drives audio.
     this.sourceNode.connect(this.captureNode).connect(this.audioContext.destination);
-    this.playbackNode.connect(this.audioContext.destination);
+    this.sourceNode.connect(this.inputAnalyser);
+    this.playbackNode.connect(this.outputGainNode).connect(this.audioContext.destination);
+    this.playbackNode.connect(this.outputAnalyser);
 
     this.wsWorker = new Worker(`${BASE}/websocket-worker.js`, { type: "module" });
     this.wsWorker.onmessage = (e) => this._onWorkerMessage(e.data);
@@ -157,6 +205,12 @@ export class AudioEngine {
     this.captureNode?.disconnect();
     this.playbackNode?.disconnect();
     this.sourceNode?.disconnect();
+    this.outputGainNode?.disconnect();
+    this.inputAnalyser?.disconnect();
+    this.outputAnalyser?.disconnect();
+    this.outputGainNode = null;
+    this.inputAnalyser = null;
+    this.outputAnalyser = null;
     this.mediaStream?.getTracks().forEach((t) => t.stop());
     if (this.audioContext && this.audioContext.state !== "closed") {
       await this.audioContext.close();
@@ -167,6 +221,11 @@ export class AudioEngine {
     this._uttSamples = [];
     this._lastLoudAt = 0;
     this._lastRecvAt = 0;
+    // Mute/hold are per-call state, not a lasting preference -- a fresh
+    // start() begins unmuted and off-hold. Volume DOES persist (it's a
+    // user preference, restored from this._volume in the next start()).
+    this.muted = false;
+    this.onHold = false;
     this._emit("connection", "disconnected");
   }
 
@@ -175,10 +234,51 @@ export class AudioEngine {
     this._handlers.clear();
   }
 
-  // ----- model + controls (stubs until inference lands) -------------------
+  // ----- model + controls -------------------------------------------------
 
   async switchModel(modelId) {
     this.wsWorker?.postMessage({ type: "switch_model", modelId });
+  }
+
+  /** Recompute the capture worklet's active state from the mute/hold gates. */
+  _applyCaptureGate() {
+    const active = !(this.muted || this.onHold);
+    this.captureNode?.port.postMessage({ type: active ? "start" : "stop" });
+  }
+
+  /**
+   * Stop (or resume) sending mic audio, without touching playback or the
+   * server-side model selection -- "stop sending mic" (Dialer mute, M10).
+   * @param {boolean} muted
+   */
+  setMuted(muted) {
+    this.muted = muted;
+    this._applyCaptureGate();
+  }
+
+  /**
+   * Pause both directions locally (Dialer hold, M10): mic capture stops (same
+   * gate as setMuted) and playback of already-arriving audio is paused too,
+   * so neither side is heard at this end while on hold. This is a client-side
+   * approximation -- there is no Twilio hold-music/server-side bridge pause
+   * in v1 (see PRODUCT_SPEC §4.3) -- but it gives both parties silence for
+   * the duration, which is the user-visible behavior that matters.
+   * @param {boolean} hold
+   */
+  setHold(hold) {
+    this.onHold = hold;
+    this._applyCaptureGate();
+    this.playbackNode?.port.postMessage({ type: hold ? "stop" : "start" });
+  }
+
+  /**
+   * Output gain, applied via a GainNode (native, allocation-free). Accepts
+   * slightly above unity (up to 2x) for a modest boost; clamps below 0.
+   * @param {number} value 0..2, where 1.0 is unity gain
+   */
+  setVolume(value) {
+    this._volume = Math.min(2.0, Math.max(0.0, value));
+    if (this.outputGainNode) this.outputGainNode.gain.value = this._volume;
   }
 
   /**

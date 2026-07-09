@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Settings — Mockingbird{% endblock %}
+
+{% block content %}
+<section class="settings">
+  <header>
+    <h1>Settings</h1>
+    <p class="subtitle">Audio devices, quality preset, and account info.</p>
+  </header>
+
+  <h2 class="section-title">Audio</h2>
+  <div class="clone-form">
+    <select id="input-device" class="select">
+      <option value="">System default microphone</option>
+    </select>
+    <select id="output-device" class="select">
+      <option value="">System default speakers</option>
+    </select>
+    <button id="detect-devices" class="btn" type="button">Detect devices</button>
+  </div>
+  <p id="device-note" class="muted">Device names appear once the browser has granted microphone
+    access — click "Detect devices" (or Start on the Live Monitor) once per session.</p>
+
+  <h2 class="section-title">Quality</h2>
+  <div class="clone-form">
+    <select id="quality-preset" class="select">
+      <option value="latency">Lowest latency</option>
+      <option value="balanced">Balanced</option>
+      <option value="quality">Highest quality</option>
+    </select>
+  </div>
+  <div class="toggle-row">
+    <label class="toggle"><input id="noise-suppression" type="checkbox" /> Noise suppression</label>
+    <label class="toggle"><input id="echo-cancellation" type="checkbox" /> Echo cancellation</label>
+    <label class="toggle"><input id="auto-gain" type="checkbox" /> Auto gain control</label>
+  </div>
+
+  <div class="controls">
+    <button id="save" class="btn" type="button">Save settings</button>
+  </div>
+  <p id="status" class="status"></p>
+
+  <h2 class="section-title">Account</h2>
+  <dl id="account-info" class="account-info">
+    <dt>Email</dt><dd id="acct-email">—</dd>
+    <dt>Plan</dt><dd id="acct-plan">—</dd>
+  </dl>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { requireAuth, authHeaders } from "/static/js/auth.js";
+
+  const GATEWAY = {{ public_gateway_url | tojson }};
+  // Settings is gated (matches Studio/Dialer): requireAuth() bounces to
+  // /login when signed out, and throwing halts the rest of this module so no
+  // unauthenticated fetch runs.
+  if (!requireAuth()) throw new Error("not authenticated");
+
+  const inputSelect = document.getElementById("input-device");
+  const outputSelect = document.getElementById("output-device");
+  const detectBtn = document.getElementById("detect-devices");
+  const deviceNote = document.getElementById("device-note");
+  const qualitySelect = document.getElementById("quality-preset");
+  const noiseCk = document.getElementById("noise-suppression");
+  const echoCk = document.getElementById("echo-cancellation");
+  const gainCk = document.getElementById("auto-gain");
+  const saveBtn = document.getElementById("save");
+  const statusEl = document.getElementById("status");
+  const acctEmail = document.getElementById("acct-email");
+  const acctPlan = document.getElementById("acct-plan");
+
+  const setStatus = (msg) => { statusEl.textContent = msg; };
+
+  async function populateDevices(preferred = {}) {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      deviceNote.textContent = "This browser does not support device enumeration.";
+      return;
+    }
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const fill = (select, kind, savedId) => {
+        const previous = select.value;
+        [...select.querySelectorAll("option[data-device]")].forEach((o) => o.remove());
+        for (const d of devices.filter((dev) => dev.kind === kind)) {
+          const opt = document.createElement("option");
+          opt.value = d.deviceId;
+          opt.dataset.device = "1";
+          const kindLabel = kind === "audioinput" ? "Microphone" : "Speaker";
+          opt.textContent = d.label || `${kindLabel} (${d.deviceId.slice(0, 6)})`;
+          select.appendChild(opt);
+        }
+        select.value = savedId || previous || "";
+      };
+      fill(inputSelect, "audioinput", preferred.audio_input_device_id);
+      fill(outputSelect, "audiooutput", preferred.audio_output_device_id);
+    } catch (err) {
+      deviceNote.textContent = "Could not list audio devices: " + (err?.message || err);
+    }
+  }
+
+  detectBtn.addEventListener("click", async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      deviceNote.textContent = "Devices detected.";
+    } catch (err) {
+      deviceNote.textContent =
+        "Microphone permission denied — device names stay generic (" + (err?.message || err) + ").";
+    }
+    await populateDevices();
+  });
+
+  async function loadSettings() {
+    try {
+      const resp = await fetch(`${GATEWAY}/api/settings`, { headers: authHeaders() });
+      if (resp.status === 401) { window.location.href = "/login"; return; }
+      if (!resp.ok) throw new Error(`GET /api/settings ${resp.status}`);
+      const s = await resp.json();
+      qualitySelect.value = s.quality_preset || "balanced";
+      noiseCk.checked = s.noise_suppression !== false;
+      echoCk.checked = s.echo_cancellation !== false;
+      gainCk.checked = s.auto_gain_control !== false;
+      await populateDevices(s);
+    } catch (err) {
+      setStatus("Could not load settings: " + (err?.message || err));
+    }
+  }
+
+  async function loadAccount() {
+    try {
+      const resp = await fetch(`${GATEWAY}/auth/me`, { headers: authHeaders() });
+      if (!resp.ok) return;
+      const me = await resp.json();
+      acctEmail.textContent = me.email || "—";
+      acctPlan.textContent = me.plan || "—";
+    } catch {
+      /* account panel just stays blank; not fatal to the rest of the page */
+    }
+  }
+
+  saveBtn.addEventListener("click", async () => {
+    saveBtn.disabled = true;
+    setStatus("Saving…");
+    try {
+      const resp = await fetch(`${GATEWAY}/api/settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({
+          audio_input_device_id: inputSelect.value || null,
+          audio_output_device_id: outputSelect.value || null,
+          quality_preset: qualitySelect.value,
+          noise_suppression: noiseCk.checked,
+          echo_cancellation: echoCk.checked,
+          auto_gain_control: gainCk.checked,
+        }),
+      });
+      if (resp.status === 401) { window.location.href = "/login"; return; }
+      if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+      setStatus("Saved.");
+    } catch (err) {
+      setStatus("Could not save: " + (err?.message || err));
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  loadSettings();
+  loadAccount();
+</script>
+{% endblock %}

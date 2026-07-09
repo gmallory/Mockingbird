@@ -15,6 +15,20 @@
     <select id="voice-select" class="select" title="Voice to convert into">
       <option value="">Echo (no voice)</option>
     </select>
+    <label class="toggle" title="Off bypasses conversion (echo); on restores the selected voice">
+      <input id="transform-toggle" type="checkbox" checked /> Transform enabled
+    </label>
+  </div>
+
+  <div class="waveforms">
+    <div class="waveform">
+      <span class="metric__label">Input waveform</span>
+      <canvas id="wave-in" width="640" height="80"></canvas>
+    </div>
+    <div class="waveform">
+      <span class="metric__label">Output waveform</span>
+      <canvas id="wave-out" width="640" height="80"></canvas>
+    </div>
   </div>
 
   <div class="metrics">
@@ -34,6 +48,11 @@
       <span class="metric__label">Output level</span>
       <div class="meter"><div id="out-level" class="meter__fill"></div></div>
     </div>
+    <div class="metric metric--wide">
+      <span class="metric__label">Voice similarity</span>
+      <span id="similarity" class="metric__value">—</span>
+      <span id="similarity-note" class="muted small">Select a voice and start the loop.</span>
+    </div>
   </div>
 
   <p id="status" class="status"></p>
@@ -47,6 +66,7 @@
 {% block scripts %}
 <script type="module">
   import { AudioEngine } from "/static/js/audio-engine/audio-engine.js";
+  import { CorrelationTracker } from "/static/js/audio-engine/utils/metrics.js";
   import { authHeaders, getToken } from "/static/js/auth.js";
 
   const WS_URL = {{ public_ws_url | tojson }};
@@ -60,9 +80,16 @@
   const outLevelEl = document.getElementById("out-level");
   const statusEl = document.getElementById("status");
   const voiceSelect = document.getElementById("voice-select");
+  const transformToggle = document.getElementById("transform-toggle");
+  const similarityEl = document.getElementById("similarity");
+  const similarityNoteEl = document.getElementById("similarity-note");
+  const waveInCanvas = document.getElementById("wave-in");
+  const waveOutCanvas = document.getElementById("wave-out");
 
   const engine = new AudioEngine({ websocketUrl: WS_URL });
   let running = false;
+  let measuredSimilarity = null; // VoiceModel.similarity_score, when one exists
+  const corrTracker = new CorrelationTracker();
 
   // Walkie-talkie scale: utterance latency is end-of-speech -> first output, in
   // seconds (the <300ms per-frame budget belongs to the GPU path only).
@@ -82,6 +109,7 @@
       for (const v of await resp.json()) {
         const opt = document.createElement("option");
         opt.value = v.voice_id;
+        opt.dataset.id = v.id; // registry row id, for GET /api/voices/:id (similarity)
         opt.textContent = v.label;
         voiceSelect.appendChild(opt);
       }
@@ -90,11 +118,74 @@
     }
   }
 
+  // ----- voice similarity meter -------------------------------------------
+  // Surfaces VoiceModel.similarity_score when one has been measured (M9: no
+  // automated scorer exists yet, so this is usually unset). Otherwise falls
+  // back to a genuinely-computed, clearly-labeled LIVE ESTIMATE -- a rolling
+  // correlation between the input/output level meters -- rather than
+  // inventing a number and presenting it as measured.
+  async function loadMeasuredSimilarity() {
+    measuredSimilarity = null;
+    const opt = voiceSelect.selectedOptions[0];
+    const rowId = opt?.dataset?.id;
+    if (!rowId) return;
+    try {
+      const resp = await fetch(`${GATEWAY}/api/voices/${rowId}`, { headers: authHeaders() });
+      if (!resp.ok) return;
+      const body = await resp.json();
+      if (typeof body.similarity_score === "number") measuredSimilarity = body.similarity_score;
+    } catch {
+      /* stays a live estimate if this lookup fails */
+    }
+  }
+
+  function updateSimilarityMeter() {
+    if (measuredSimilarity !== null) {
+      similarityEl.textContent = `${Math.round(measuredSimilarity * 100)}%`;
+      similarityNoteEl.textContent = "Measured for this voice's HD training job.";
+      return;
+    }
+    if (!running || !voiceSelect.value) {
+      similarityEl.textContent = "—";
+      similarityNoteEl.textContent = "Select a voice and start the loop.";
+      return;
+    }
+    const corr = corrTracker.correlation();
+    if (corr === null) {
+      similarityEl.textContent = "—";
+      similarityNoteEl.textContent = "Live estimate warming up…";
+      return;
+    }
+    const pct = Math.max(0, Math.round(corr * 100));
+    similarityEl.textContent = `~${pct}%`;
+    similarityNoteEl.textContent = "Live estimate (input/output signal correlation) — not a trained similarity score.";
+  }
+
   voiceSelect.addEventListener("change", () => {
-    engine.switchModel(voiceSelect.value || null);
+    if (transformToggle.checked) {
+      engine.switchModel(voiceSelect.value || null);
+    }
     statusEl.textContent = voiceSelect.value
       ? `Voice set to "${voiceSelect.selectedOptions[0].textContent}". Speak a phrase, then pause.`
       : "Echo mode — audio returns unchanged.";
+    corrTracker.reset();
+    loadMeasuredSimilarity().then(updateSimilarityMeter);
+  });
+
+  // Explicit transform on/off toggle (M10): off pins the streaming model to
+  // "" (echo) without losing the dropdown's selection; on restores it. Reuses
+  // the existing switchModel path -- no new WS message, no engine change.
+  transformToggle.addEventListener("change", () => {
+    if (transformToggle.checked) {
+      engine.switchModel(voiceSelect.value || null);
+      statusEl.textContent = voiceSelect.value
+        ? `Transform on — using "${voiceSelect.selectedOptions[0].textContent}".`
+        : "Transform on, but no voice is selected — still echoing.";
+    } else {
+      engine.switchModel(null);
+      statusEl.textContent = "Transform off — echoing your voice unchanged.";
+    }
+    updateSimilarityMeter();
   });
 
   engine.on("connection", (status) => {
@@ -112,6 +203,8 @@
   engine.on("level", ({ input, output }) => {
     inLevelEl.style.width = Math.min(100, input * 140).toFixed(0) + "%";
     outLevelEl.style.width = Math.min(100, output * 140).toFixed(0) + "%";
+    corrTracker.push(input, output);
+    updateSimilarityMeter();
   });
 
   engine.on("error", (err) => {
@@ -128,12 +221,44 @@
   engine.on("authError", (msg) => stopWithMessage(msg + " (Log in again to convert; echo still works.)"));
   engine.on("limited", (msg) => stopWithMessage(msg + " Close another session or try again later."));
 
+  // ----- waveform visualizer (canvas + AnalyserNode) ----------------------
+  function drawWaveform(canvas, getAnalyser, isRunning) {
+    const ctx = canvas.getContext("2d");
+    let data = null;
+    function frame() {
+      const analyser = getAnalyser();
+      if (isRunning() && analyser) {
+        if (!data || data.length !== analyser.fftSize) data = new Uint8Array(analyser.fftSize);
+        analyser.getByteTimeDomainData(data);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.beginPath();
+        const step = canvas.width / data.length;
+        for (let i = 0; i < data.length; i++) {
+          const y = (data[i] / 255) * canvas.height;
+          const x = i * step;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = "#6c5ce7";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      } else {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+  drawWaveform(waveInCanvas, () => engine.inputAnalyser, () => running);
+  drawWaveform(waveOutCanvas, () => engine.outputAnalyser, () => running);
+
   toggleBtn.addEventListener("click", async () => {
     if (running) {
       await engine.stop();
       running = false;
       toggleBtn.textContent = "Start";
       statusEl.textContent = "";
+      updateSimilarityMeter();
       return;
     }
     try {
@@ -141,11 +266,14 @@
       statusEl.textContent = "Requesting microphone…";
       // Pass the token so an authenticated session can convert and is
       // rate-limited; logged-out visitors send none and get the echo-only demo.
-      await engine.start(voiceSelect.value || null, getToken());
+      const modelId = transformToggle.checked ? (voiceSelect.value || null) : null;
+      await engine.start(modelId, getToken());
       running = true;
       toggleBtn.textContent = "Stop";
       statusEl.textContent = "Speak a phrase, then pause — you'll hear it back in the cloned voice " +
         "(or echoed, if no voice is configured).";
+      corrTracker.reset();
+      updateSimilarityMeter();
     } catch (err) {
       statusEl.textContent = "Could not start: " + (err?.message || err);
     } finally {
