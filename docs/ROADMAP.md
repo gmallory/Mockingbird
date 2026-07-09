@@ -30,7 +30,7 @@ Before starting a milestone, read this file plus the relevant `agents/*.agent.md
 | **M8**    | **Calling — Twilio PSTN (PRODUCT_SPEC Phase 2, outbound cut)**              | **in progress**                               |
 | → M8a     | Outbound PSTN calls + media-stream bridge + dialer UI                       | done (local); live Twilio run pending         |
 | → M8b     | Inbound calls, recording, WebRTC peer calls, contacts                       | **descoped** (2026-07-07 — future/commercial) |
-| **M9**    | **HD Clone tier — RVC training + single-graph ONNX export**                 | pending                                       |
+| **M9**    | **HD Clone tier — RVC training + single-graph ONNX export**                 | done (local); GPU fine-tune run pending       |
 | **M10**   | **UI completion (Dashboard, Settings, fine-tune, meters) + v1 sign-off**    | pending                                       |
 
 ## Backend priority (owner decision, 2026-07-04)
@@ -508,30 +508,96 @@ call recording (original + transformed, consent language per PRODUCT_SPEC §4.3)
 browser↔browser WebRTC calls, contacts. Also: Redis-backed bridge routing if the
 gateway ever runs more than one replica.
 
-### M9 — HD Clone tier (RVC) — PENDING
+### M9 — HD Clone tier (RVC) — DONE (local); GPU fine-tune run pending
 
 **Goal:** the PRODUCT_SPEC §4.2 second tier — fine-tuned RVC voices that beat the
 instant clone, behind the **same** `BackendSession` / M5a ONNX contract (backend swap
-only; no WS/gRPC change). This is the "M5c candidate" deferred in M5b, now scheduled.
-Sketch only — write the detailed spec when picking it up, and spike the export first:
-it is the risk item.
+only; no WS/gRPC change). This is the "M5c candidate" deferred in M5b. Same posture
+as M5b's GPU bench and M8a's live-Twilio run: the pipeline, contracts, and UI are
+built and offline-tested end to end; the real multi-hour GPU fine-tune that actually
+beats the instant clone is the deferred tail.
 
-- **Single-graph export (the hard part):** compose HuBERT content encoding + F0
-  estimation + the RVC synthesizer into one audio-in/audio-out ONNX graph
-  (float32 `[1, N]` @ `SELF_HOSTED_MODEL_SAMPLE_RATE`, M5a contract). Follow the
-  M5b pattern (`inference/app/export/`, torch only in the export group).
-- **Training pipeline:** Celery + Redis job queue (PRODUCT_SPEC §5): upload →
-  preprocess → fine-tune base RVC on the GPU box → export ONNX → register as a
-  `voices` row. Introduces the `VoiceModel` shape (PRODUCT_SPEC §6) for status/artifacts.
-- **API:** `POST /api/voices/{id}/train` + `GET /api/voices/{id}/train/status`
-  (PRODUCT_SPEC §7 planned table).
-- **UI:** training progress in the Studio (progress bar + ETA).
-- Needs the rented GPU box — the M5 `provision_cloud_gpu.sh` script covers it; run the
-  M5 bench first.
+What landed:
 
-**Done when:** a 10–30 min sample fine-tunes to an RVC voice that streams through
-`self_hosted` end-to-end and beats the instant clone of the same speaker in a
-side-by-side listening check (PRODUCT_SPEC §15 criterion 4).
+- **Gateway `VoiceModel` table** (`gateway/app/db/models.py`) + migration
+  `ca561f6a0421` (chained after `a8f4c2d7e1b3`, same `checkfirst`-enum pattern as
+  M8a; verified up/down/up against Postgres). One row per training job:
+  status/progress/stage/error plus the PRODUCT_SPEC §6 artifact/quality/fine-tune
+  fields.
+- **Training API** (`gateway/app/training/routes.py`): `POST
+  /api/voices/{voice_id}/train` (multipart clip, owned-voice check mirroring
+  `calls/routes.py`, 202 + the new `VoiceModel` row) and `GET
+  /api/voices/{voice_id}/train/status` (latest job for that voice, ETA derived
+  from elapsed/progress). Feature-flagged like calling — `ENABLE_TRAINING`
+  (already in `.env.example`) off, or the job queue unreachable, both return a
+  clean 503 rather than touching the rest of the app.
+- **Celery + Redis job queue** (`gateway/app/training/celery_app.py` + `tasks.py`
+  + `db.py`): `train_voice` drives validation → preprocessing →
+  feature_extraction → training → export → ready over a **synchronous**
+  SQLAlchemy session (new `psycopg` dep — the rest of the app is async/asyncpg,
+  but a Celery task runs outside any event loop). The one heavy step calls the
+  inference service's `POST /train_hd` over HTTP
+  (`gateway/app/inference/http.py::train_hd`, a sync httpx client for the
+  worker). On success it registers a **new**, additive `Voice` registry row for
+  the trained model (the source instant-clone row is untouched) so it streams
+  through the existing `self_hosted` session unchanged. On any failure — a bad
+  clip, a disconnected inference service, a `Voice.voice_id` collision — the row
+  is marked `failed` with `error` set; Celery's default reconnect backoff
+  (~20s) is tuned down so a dead broker/backend fails the enqueue in well under
+  a second, never hangs the request.
+- **Inference `POST /train_hd`** (`inference/app/training.py`, mounted on the
+  health app): runs the pipeline in a thread (like `_clone_self_hosted`); no DB
+  access — inference owns artifacts only, gateway is the sole DB owner, same
+  split as M4b/M5b.
+- **Torch-free HD pipeline** (`inference/app/export/hd_train.py`, mirrors
+  `app/export/clone.py`): validates and decodes the clip (reusing
+  `app.export.clone.decode_clip`, generalized to take a target rate + minimum
+  length), reports progress through all five named stages, and — since no real
+  RVC template exists yet — writes a **contract-valid synthetic
+  `{model_id}.onnx`** (a tiny deterministic ONNX gain graph keyed off the
+  clip's own hash), loudly logged as a stand-in. Verified end-to-end
+  (`_verify_contract` loads and runs the graph in ORT) and confirmed to stream
+  through the **unchanged** `self_hosted` backend with an exact 1:1 sample count.
+- **Real single-graph export scaffold** (`inference/app/export/rvc/compose.py`
+  + `scripts/export_rvc_onnx.py`, torch, `export` group only — no new
+  dependency, M5b already added torch there): composes a HuBERT-content-encoder
+  stand-in + F0-estimator stand-in + RVC/VITS-synthesizer stand-in into ONE
+  audio-in/audio-out ONNX graph satisfying the M5a contract. Real, exportable
+  architecture, but **placeholder weights, not a trained voice** — no vendored
+  HuBERT/RVC checkpoint, no fine-tune loop (needs the rented GPU). When a real
+  export lands at `models/rvc/rvc_converter.onnx`, `hd_train_local`
+  automatically switches from the synthetic stand-in to baking a per-clip
+  conditioning value into a copy of it, reusing
+  `app.export.clone.bake_tgt_se` (generalized in M9 to take any initializer
+  name, not just OpenVoice's `tgt_se`) — both branches verified directly.
+- **Studio UI** (`frontend/templates/pages/studio.html`): an "HD Clone (train)"
+  section — pick a registered voice, upload a longer sample, "Train HD" posts
+  to the gateway, then polls `GET .../train/status` every 3s for a progress
+  bar + stage label + ETA until `ready`/`failed`. Same Bearer-auth +
+  vanilla-JS idiom as the rest of Studio; no npm/React.
+
+**Verified live**, not just mocked: a real WAV upload through `POST
+/api/voices/{id}/train`, against a real gateway + real inference process (over
+real HTTP) + real Postgres/Redis, with Celery in eager mode — the job reaches
+`ready`, the trained voice appears in `GET /voices`, and its ONNX file loads
+and streams through `self_hosted`. Failure paths (inference error, dead
+broker, a registry id collision) all degrade to a clean failed row + logged
+warning, never a crash.
+
+**Remaining (the real "beats the instant clone" bar; moves to its own GPU
+run):** vendor real HuBERT + F0 + RVC/VITS pretrained weights into
+`app/export/rvc/compose.py` in place of the placeholder blocks, implement the
+actual per-speaker fine-tune loop (PRODUCT_SPEC §4.2: 30min–2hrs on a GPU), and
+run `scripts/export_rvc_onnx.py` for real on the M5 `cloud_gpu` box — then
+re-run this same pipeline end to end and do the side-by-side listening check
+(PRODUCT_SPEC §15 criterion 4). Self-hosted/OpenVoice remains the primary
+instant-clone tier regardless of this outcome.
+
+**Done when (met, offline-testable slice):** a reference clip trains through
+the full pipeline, exports to the M5a ONNX contract, and streams through
+`self_hosted` end-to-end with progress/ETA visible in the Studio UI. **Not yet
+met (needs the GPU run):** beating the instant clone of the same speaker in a
+side-by-side listening check.
 
 ### M10 — UI completion + v1 sign-off — PENDING
 

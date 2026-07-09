@@ -5,7 +5,9 @@ the Supabase auth user id (``sub``), mirrored locally on first authenticated
 request (M6a). ``Voice`` (M4b) is the voice registry: one row per cloned voice,
 persisted so a speaker can be rendered as it on the streaming path. As of M6a each
 voice is owned by a ``User`` (``user_id`` FK). ``CallRecord`` (M8a) is the
-call history: one row per outbound PSTN call placed through Twilio.
+call history: one row per outbound PSTN call placed through Twilio. ``VoiceModel``
+(M9) tracks an HD (RVC fine-tune) training job's status/progress/artifacts,
+separate from the lightweight ``Voice`` registry row it trains from.
 """
 
 from datetime import UTC, datetime
@@ -32,6 +34,17 @@ class CallDirection(StrEnum):
 class CallStatus(StrEnum):
     ACTIVE = "active"
     COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class VoiceModelType(StrEnum):
+    INSTANT = "instant"
+    HD = "hd"
+
+
+class VoiceModelStatus(StrEnum):
+    TRAINING = "training"
+    READY = "ready"
     FAILED = "failed"
 
 
@@ -133,3 +146,68 @@ class CallRecord(SQLModel, table=True):
     started_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
     ended_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     duration_sec: float = 0.0
+
+
+class VoiceModel(SQLModel, table=True):
+    """An HD (RVC fine-tune) training job (M9): status, progress, and artifacts.
+
+    Distinct from ``Voice`` (the lightweight, immediately-usable registry row):
+    a ``VoiceModel`` tracks the longer training pipeline PRODUCT_SPEC §4.2
+    describes (validation -> preprocessing -> feature_extraction -> training ->
+    export), which can take minutes to hours and can fail partway through.
+    ``voice_id`` points back at the ``Voice`` row the training was requested
+    against (the clip's existing instant-clone registry entry); it is nullable
+    because a row could in principle be created ahead of that association. On
+    success the Celery task registers a *new* ``Voice`` row for the trained
+    model (``model_path``, the exported ``{model_id}.onnx`` id) so it streams
+    through the existing self_hosted session exactly like any other voice.
+    """
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="user.id", index=True)
+    voice_id: UUID | None = Field(default=None, foreign_key="voice.id")
+    name: str
+    type: VoiceModelType = Field(
+        default=VoiceModelType.HD, sa_column=_enum_column(VoiceModelType, "voicemodeltype")
+    )
+    status: VoiceModelStatus = Field(
+        default=VoiceModelStatus.TRAINING,
+        sa_column=_enum_column(VoiceModelStatus, "voicemodelstatus"),
+    )
+    # Driven by the Celery task as the pipeline advances; polled by
+    # GET /api/voices/{id}/train/status.
+    progress: float = 0.0
+    stage: str = ""
+    error: str | None = None
+
+    # Training metadata, filled in as the pipeline learns them (preprocessing
+    # reports the clip's real duration/segment count; 0 until then).
+    sample_duration_sec: float = 0.0
+    sample_count: int = 0
+    training_started_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
+    training_completed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+    # Model artifacts. model_path is the exported model's id (matches the
+    # self_hosted streaming model_id, i.e. `{model_path}.onnx` in
+    # SELF_HOSTED_MODEL_DIR) — mirroring Voice.voice_id's dual role.
+    model_path: str = ""
+    model_size_bytes: int = 0
+
+    # Quality metrics (PRODUCT_SPEC §6); no automated scorer exists yet (v1 is a
+    # listening-check, not a PESQ harness — see PRODUCT_SPEC §15), so these stay
+    # unset unless filled in by hand.
+    similarity_score: float | None = None
+    mos_score: float | None = None
+
+    # Fine-tune controls (M10 exposes these via PATCH /api/voices/:id); the
+    # columns land now so M9's row shape matches PRODUCT_SPEC §6 exactly.
+    pitch_offset: float = 0.0
+    speed_factor: float = 1.0
+    breathiness: float = 0.0
+
+    created_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
+    updated_at: datetime = Field(
+        default_factory=_utcnow,
+        sa_type=DateTime(timezone=True),
+        sa_column_kwargs={"onupdate": _utcnow},
+    )

@@ -7,6 +7,8 @@ requires-python = ">=3.14"
 dependencies = [
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
+    # HD training job queue (M9): app/training/celery_app.py, broker+backend = Redis.
+    "celery>=5",
     "fastapi>=0.138.1",
     "greenlet>=3.5.3",
     "grpcio>=1.81.1",
@@ -15,6 +17,10 @@ dependencies = [
     # hot path. It was previously dev-only, which under-declared a real runtime dep.
     "httpx>=0.28.1",
     "prometheus-client>=0.25.0",
+    # Synchronous Postgres driver for the Celery training worker (M9,
+    # app/training/db.py) — the rest of the app is async (asyncpg), but a Celery
+    # task runs outside any event loop and needs a plain blocking session instead.
+    "psycopg[binary]>=3.2",
     "pydantic-settings>=2.14.2",
     # Verify Supabase-issued access tokens (HS256) on authenticated requests (M6a).
     "pyjwt>=2.10.1",

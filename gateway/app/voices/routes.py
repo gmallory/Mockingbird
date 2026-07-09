@@ -33,18 +33,24 @@ async def list_voices(
     return list(result.scalars().all())
 
 
-async def _read_clip(clip: UploadFile) -> bytes:
-    """Read the upload in chunks, aborting once it exceeds ``max_clip_bytes``.
+async def _read_clip(clip: UploadFile, max_bytes: int | None = None) -> bytes:
+    """Read the upload in chunks, aborting once it exceeds ``max_bytes``.
 
     Bounds memory use regardless of what (if anything) the client's Content-Length
-    header claims.
+    header claims. ``max_bytes`` defaults to ``settings.max_clip_bytes`` (the
+    instant-clone cap); the HD training route (M9, ``app/training/routes.py``)
+    reuses this same helper with the much larger ``max_hd_clip_bytes`` instead
+    of duplicating the chunked-read loop.
     """
+    limit = max_bytes if max_bytes is not None else settings.max_clip_bytes
     chunks: list[bytes] = []
     total = 0
     while chunk := await clip.read(1 << 16):
         total += len(chunk)
-        if total > settings.max_clip_bytes:
-            raise HTTPException(status_code=413, detail="clip exceeds max_clip_bytes")
+        if total > limit:
+            raise HTTPException(
+                status_code=413, detail=f"clip exceeds maximum size of {limit} bytes"
+            )
         chunks.append(chunk)
     return b"".join(chunks)
 

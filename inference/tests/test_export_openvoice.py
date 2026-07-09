@@ -16,6 +16,7 @@ import wave
 from pathlib import Path
 
 import numpy as np
+import onnx
 import pytest
 
 torch = pytest.importorskip("torch", reason="export tests need the export dependency group")
@@ -173,6 +174,54 @@ def test_decode_clip_wav_stereo_resamples_to_openvoice_rate():
 def test_decode_clip_rejects_too_short():
     with pytest.raises(CloneError, match="too short"):
         decode_clip(_wav_bytes(_sine(0.2), TINY_SR))
+
+
+def test_decode_clip_honors_custom_min_seconds():
+    """M9 (app.export.hd_train) reuses decode_clip with a much higher floor
+    (MIN_HD_CLIP_SECONDS=5s) than the instant-clone default (1s) — the
+    generalized parameter must gate on the caller's value in both
+    directions, not just the module default.
+    """
+    clip = _wav_bytes(_sine(2.0), TINY_SR)  # passes the 1s default...
+    decode_clip(clip)
+    with pytest.raises(CloneError, match="too short"):  # ...but not a 5s floor.
+        decode_clip(clip, min_seconds=5.0)
+
+    short_clip = _wav_bytes(_sine(0.5), TINY_SR)
+    with pytest.raises(CloneError, match="too short"):  # fails the 1s default...
+        decode_clip(short_clip)
+    decode_clip(short_clip, min_seconds=0.2)  # ...but passes a lower custom floor.
+
+
+def test_bake_tgt_se_honors_custom_tensor_name(tmp_path):
+    """M9 (app.export.hd_train) reuses bake_tgt_se with tensor_name="speaker"
+    instead of OpenVoice's hardcoded "tgt_se" default — the generalized
+    parameter must actually select which initializer gets patched.
+    """
+    template = tmp_path / "cond.onnx"
+    inp = onnx.helper.make_tensor_value_info("audio", onnx.TensorProto.FLOAT, [1, None])
+    out = onnx.helper.make_tensor_value_info("out", onnx.TensorProto.FLOAT, [1, None])
+    cond = onnx.helper.make_tensor("cond", onnx.TensorProto.FLOAT, [], [1.0])
+    node = onnx.helper.make_node("Mul", ["audio", "cond"], ["out"])
+    graph = onnx.helper.make_graph([node], "cond_gain", [inp], [out], initializer=[cond])
+    model = onnx.helper.make_model(graph, opset_imports=[onnx.helper.make_opsetid("", 17)])
+    model.ir_version = 8
+    onnx.save(model, str(template))
+
+    audio = np.full((1, 100), 0.5, dtype=np.float32)
+
+    # Default tensor_name ("tgt_se") matches nothing in this graph, so "cond"
+    # is left at its original value (1.0 -> passthrough).
+    unpatched_path = tmp_path / "unpatched.onnx"
+    bake_tgt_se(template, np.array(9.0, dtype=np.float32), unpatched_path)
+    (unpatched_out,) = _session(unpatched_path).run(None, {"audio": audio})
+    assert np.allclose(unpatched_out, audio)
+
+    # tensor_name="cond" actually replaces it.
+    patched_path = tmp_path / "patched.onnx"
+    bake_tgt_se(template, np.array(9.0, dtype=np.float32), patched_path, tensor_name="cond")
+    (patched_out,) = _session(patched_path).run(None, {"audio": audio})
+    assert np.allclose(patched_out, audio * 9.0)
 
 
 def test_make_model_id_is_backend_safe():

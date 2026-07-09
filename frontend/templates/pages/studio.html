@@ -29,6 +29,21 @@
 
   <h2 class="section-title">Registered voices</h2>
   <ul id="voice-list" class="voice-list"><li class="muted">Loading…</li></ul>
+
+  <h2 class="section-title">HD Clone (train)</h2>
+  <p class="subtitle">Upload a longer sample (10-30 minutes of clean speech) to fine-tune a
+    higher-quality HD voice from one of your voices above. Training runs in the background —
+    leave this page open or come back later and it'll still be here.</p>
+  <div class="clone-form">
+    <select id="hd-voice-select" class="select"><option value="">Choose a voice…</option></select>
+    <input id="hd-clip" class="input" type="file" accept="audio/*" />
+    <button id="hd-train" class="btn" type="button" disabled>Train HD</button>
+  </div>
+  <div id="hd-progress-wrap" class="metric" style="display:none">
+    <span class="metric__label"><span id="hd-stage">queued</span> · <span id="hd-eta"></span></span>
+    <div class="meter"><div id="hd-progress-fill" class="meter__fill"></div></div>
+  </div>
+  <p id="hd-status" class="status"></p>
 </section>
 {% endblock %}
 
@@ -54,12 +69,22 @@
   const statusEl = document.getElementById("status");
   const voiceList = document.getElementById("voice-list");
 
+  const hdVoiceSelect = document.getElementById("hd-voice-select");
+  const hdClipInput = document.getElementById("hd-clip");
+  const hdTrainBtn = document.getElementById("hd-train");
+  const hdProgressWrap = document.getElementById("hd-progress-wrap");
+  const hdStageEl = document.getElementById("hd-stage");
+  const hdEtaEl = document.getElementById("hd-eta");
+  const hdProgressFill = document.getElementById("hd-progress-fill");
+  const hdStatusEl = document.getElementById("hd-status");
+
   let recorder = null;
   let recording = false;
   let takeBlob = null;
   let startedAt = 0;
   let timer = null;
   let autoStop = null;
+  let hdPollTimer = null;
 
   const setStatus = (msg) => { statusEl.textContent = msg; };
 
@@ -76,15 +101,26 @@
       const voices = await resp.json();
       if (!voices.length) {
         voiceList.innerHTML = '<li class="muted">No voices yet — record one above.</li>';
-        return;
+      } else {
+        voiceList.innerHTML = voices
+          .map(
+            (v) =>
+              `<li><strong>${escapeHtml(v.label)}</strong> ` +
+              `<span class="muted">${escapeHtml(v.language)} · ${escapeHtml(v.voice_id)}</span></li>`,
+          )
+          .join("");
       }
-      voiceList.innerHTML = voices
-        .map(
-          (v) =>
-            `<li><strong>${escapeHtml(v.label)}</strong> ` +
-            `<span class="muted">${escapeHtml(v.language)} · ${escapeHtml(v.voice_id)}</span></li>`,
-        )
-        .join("");
+
+      const previouslySelected = hdVoiceSelect.value;
+      hdVoiceSelect.innerHTML = '<option value="">Choose a voice…</option>';
+      for (const v of voices) {
+        const opt = document.createElement("option");
+        opt.value = v.id;
+        opt.textContent = v.label;
+        hdVoiceSelect.append(opt);
+      }
+      if (previouslySelected) hdVoiceSelect.value = previouslySelected;
+      updateHdTrainEnabled();
     } catch (err) {
       voiceList.innerHTML = `<li class="warn-note">Could not load voices: ${escapeHtml(String(err))}</li>`;
     }
@@ -171,6 +207,95 @@
     } catch (err) {
       setStatus("Clone failed: " + (err?.message || err));
       cloneBtn.disabled = false;
+    }
+  });
+
+  // ----- HD Clone (train) -----------------------------------------------
+
+  const setHdStatus = (msg) => { hdStatusEl.textContent = msg; };
+
+  function updateHdTrainEnabled() {
+    hdTrainBtn.disabled = !(hdVoiceSelect.value && hdClipInput.files.length);
+  }
+  hdVoiceSelect.addEventListener("change", updateHdTrainEnabled);
+  hdClipInput.addEventListener("change", updateHdTrainEnabled);
+
+  function formatEta(seconds) {
+    if (seconds === null || seconds === undefined) return "";
+    const s = Math.max(0, Math.round(seconds));
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return m > 0 ? `~${m}m ${rem}s remaining` : `~${rem}s remaining`;
+  }
+
+  function stopHdPolling() {
+    if (hdPollTimer) {
+      clearInterval(hdPollTimer);
+      hdPollTimer = null;
+    }
+  }
+
+  async function pollTrainStatus(voiceId) {
+    try {
+      const resp = await fetch(`${GATEWAY}/api/voices/${voiceId}/train/status`, {
+        headers: authHeaders(),
+      });
+      if (resp.status === 401) { window.location.href = "/login"; return; }
+      if (!resp.ok) throw new Error(`GET train/status ${resp.status}`);
+      const job = await resp.json();
+
+      hdStageEl.textContent = job.stage || job.status;
+      hdEtaEl.textContent = formatEta(job.eta_seconds);
+      hdProgressFill.style.width = `${Math.round((job.progress || 0) * 100)}%`;
+
+      if (job.status === "ready") {
+        stopHdPolling();
+        setHdStatus(`HD training complete ✓ — "${job.name} (HD)" is ready on the Live Monitor.`);
+        hdTrainBtn.disabled = false;
+        hdClipInput.value = "";
+        await loadVoices();
+      } else if (job.status === "failed") {
+        stopHdPolling();
+        setHdStatus("HD training failed: " + (job.error || "unknown error"));
+        hdTrainBtn.disabled = false;
+      }
+    } catch (err) {
+      // Transient poll failure (e.g. a reload mid-flight) — keep retrying on
+      // the next tick rather than giving up on the whole job.
+      setHdStatus("Checking training status… (" + (err?.message || err) + ")");
+    }
+  }
+
+  hdTrainBtn.addEventListener("click", async () => {
+    const voiceId = hdVoiceSelect.value;
+    const file = hdClipInput.files[0];
+    if (!voiceId || !file) return;
+
+    hdTrainBtn.disabled = true;
+    setHdStatus("Uploading and queuing HD training…");
+    stopHdPolling();
+    try {
+      const form = new FormData();
+      form.append("clip", file);
+      form.append("name", hdVoiceSelect.selectedOptions[0]?.textContent || "");
+      const resp = await fetch(`${GATEWAY}/api/voices/${voiceId}/train`, {
+        method: "POST",
+        body: form,
+        headers: authHeaders(),
+      });
+      if (resp.status === 401) { window.location.href = "/login"; return; }
+      if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+
+      hdProgressWrap.style.display = "";
+      hdProgressFill.style.width = "0%";
+      hdStageEl.textContent = "queued";
+      hdEtaEl.textContent = "";
+      setHdStatus("Training started — this can take a while; feel free to leave the page.");
+      hdPollTimer = setInterval(() => pollTrainStatus(voiceId), 3000);
+      await pollTrainStatus(voiceId);
+    } catch (err) {
+      setHdStatus("Could not start training: " + (err?.message || err));
+      hdTrainBtn.disabled = false;
     }
   });
 
