@@ -48,7 +48,9 @@ async def _read_clip(clip: UploadFile, max_bytes: int | None = None) -> bytes:
     while chunk := await clip.read(1 << 16):
         total += len(chunk)
         if total > limit:
-            raise HTTPException(status_code=413, detail="clip exceeds max_clip_bytes")
+            raise HTTPException(
+                status_code=413, detail=f"clip exceeds maximum size of {limit} bytes"
+            )
         chunks.append(chunk)
     return b"".join(chunks)
 

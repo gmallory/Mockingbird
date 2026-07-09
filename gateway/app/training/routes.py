@@ -57,6 +57,12 @@ async def _owned_voice(voice_id: UUID, user: User, session: AsyncSession) -> Voi
 
 def _stage_clip(clip_bytes: bytes) -> str:
     """Write the clip to a private temp file; returns its path."""
+    # NOTE: staging to a node-local temp file assumes the Celery worker shares a
+    # filesystem with this web process (single-host / eager mode) — a worker on
+    # another host would fail train_voice's `staged clip missing` check. Same
+    # process-local assumption already documented for the M8a media bridge
+    # (app/calls/bridge.py). A multi-worker deploy needs shared storage — the
+    # S3/MinIO the inference service already uses for models — out of v1 scope.
     fd, path = tempfile.mkstemp(prefix=_STAGING_PREFIX, suffix=_STAGING_SUFFIX)
     try:
         with open(fd, "wb") as fh:
