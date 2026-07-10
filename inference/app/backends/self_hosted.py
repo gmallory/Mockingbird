@@ -38,7 +38,7 @@ import structlog
 
 from app.backends.base import BackendSession, InferenceBackend
 from app.dsp import apply_tuning
-from app.tuning import TuneParams
+from app.tuning import IDENTITY_TUNE_PARAMS, TuneParams
 
 log = structlog.get_logger(__name__)
 
@@ -280,8 +280,13 @@ class SelfHostedBackend(InferenceBackend):
         self._tune_params[model_id] = params
 
     def get_tune_params(self, model_id: str) -> TuneParams:
-        """Fine-tune knobs for ``model_id``, or the identity default if never tuned."""
-        return self._tune_params.get(model_id, TuneParams())
+        """Fine-tune knobs for ``model_id``, or the shared identity default if never tuned.
+
+        The untuned case returns the module-level ``IDENTITY_TUNE_PARAMS``
+        singleton rather than a fresh allocation, so reading tuning once per
+        converted block costs nothing for a voice nobody has tuned.
+        """
+        return self._tune_params.get(model_id, IDENTITY_TUNE_PARAMS)
 
     def context_samples(self, sample_rate: int) -> int:
         return int(sample_rate * self._context_ms / 1000)

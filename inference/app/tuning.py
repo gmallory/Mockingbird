@@ -61,12 +61,17 @@ router = APIRouter()
 
 
 class TuneParams:
-    """Immutable fine-tune knobs for one streaming ``model_id``.
+    """Fine-tune knobs for one streaming ``model_id``, treated as immutable.
 
-    A plain class (not a dataclass) so a bare ``TuneParams()`` is cheap to
-    construct as the "nobody has tuned this voice" default without importing
-    ``dataclasses`` for three fields; equality is defined explicitly since
-    it's the identity-check ``self_hosted.py`` uses to skip DSP entirely.
+    Immutability is a convention, not enforced: nothing mutates an instance
+    after construction (``set_tune_params`` always stores a brand-new one),
+    which is what lets the shared ``IDENTITY_TUNE_PARAMS`` singleton below be
+    handed out for every untuned lookup without risk. Do not add in-place
+    mutation without revisiting that. A plain class (not a dataclass) so a
+    bare ``TuneParams()`` is cheap to construct as the "nobody has tuned this
+    voice" default without importing ``dataclasses`` for three fields;
+    equality is defined explicitly since it's the identity-check
+    ``self_hosted.py`` uses to skip DSP entirely.
     """
 
     __slots__ = ("pitch_offset", "speed_factor", "breathiness")
@@ -98,6 +103,14 @@ class TuneParams:
         )
 
 
+# Shared identity singleton (M10): SelfHostedBackend.get_tune_params hands this
+# out for an untuned voice instead of allocating a fresh TuneParams() on every
+# converted block, keeping the untuned hot path allocation-free (as dsp.py's
+# module docstring promises). Safe only because TuneParams is treated as
+# immutable (see its docstring): never mutate this object in place.
+IDENTITY_TUNE_PARAMS = TuneParams()
+
+
 class TuneRequest(BaseModel):
     """Body for ``POST /voices/{model_id}/tune``. Same ranges as PRODUCT_SPEC §6."""
 
@@ -117,6 +130,14 @@ async def tune_voice(model_id: str, payload: TuneRequest, request: Request) -> d
     hasn't finished starting (should not happen once the app's lifespan has
     run, but a bare/partial app state must not 500).
     """
+    # NOTE: no auth on this hop by design (same as POST /voices and POST
+    # /train_hd): it is an internal gateway->inference call. That is safe only
+    # while inference stays on a trusted network the gateway reaches privately.
+    # If inference is ever exposed to untrusted callers, any client could
+    # mutate per-model tuning and disrupt live sessions; the fix then is a
+    # shared-secret header enforced on every write endpoint here, not just this
+    # one. Adding it now is production hardening out of v1 scope (the portfolio
+    # deployment is single-box with inference not publicly reachable).
     if settings.inference_backend not in ("self_hosted", "cloud_gpu"):
         raise HTTPException(
             status_code=400,

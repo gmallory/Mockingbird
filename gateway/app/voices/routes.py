@@ -154,6 +154,15 @@ async def _get_or_create_tuning(voice: Voice, user: User, session: AsyncSession)
     model = await _tuning_for(voice, user, session)
     if model is not None:
         return model
+    # NOTE: this read-then-insert can race under two concurrent first-time
+    # PATCHes for the same voice. Both can observe "no row" and both insert a
+    # companion VoiceModel, because VoiceModel has no unique constraint on
+    # (user_id, model_path) today, so a later _tuning_for() would then return
+    # an arbitrary duplicate. Accepted for v1: one owner nudging their own
+    # voice's sliders is not a concurrent workload. The real fix is a unique
+    # constraint plus IntegrityError-and-refetch, which needs an Alembic
+    # migration and is out of v1 scope. Same single-writer posture already
+    # documented for the M9 _stage_clip staging note and the M8a media bridge.
     now = datetime.now(UTC)
     model = VoiceModel(
         user_id=user.id,

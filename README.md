@@ -18,7 +18,7 @@ mocked-out DB). The binding success criteria are **[PRODUCT_SPEC §15](docs/PROD
 | 3 | Instant-clone quality (listening check) | **Deferred** — needs an owner listening session | Exercised locally in M5b; no automated PESQ harness in v1 by design |
 | 4 | HD Clone beats the instant clone (listening check) | **Deferred** — needs the GPU fine-tune run | Training pipeline + single-graph ONNX export built and offline-tested end to end (M9); no trained HuBERT/F0/RVC weights yet |
 | 5 | UI complete (Dashboard, Settings, fine-tune controls, similarity meter, waveform viz) | **Pass** | All five built in M10 — see below |
-| 6 | CI green (format + lint + tests × 3 services) | **Partial** | Gateway (83 tests) and inference (79 tests, 1 skipped) pass unchanged; M10's `/` → Dashboard move leaves 2 frontend assertions stale until the test-author pass updates them |
+| 6 | CI green (format + lint + tests × 3 services) | **Pass** | All three suites pass: gateway (100), inference (122, 1 skipped), frontend (7). `frontend/tests/test_pages.py` was updated for M10's `/` → Dashboard routing swap (Monitor now asserted at `/monitor`, with added Dashboard/Settings/nav coverage) |
 | 7 | Docs current | **Partial** | ROADMAP + PRODUCT_SPEC are current as of this sign-off; this README got a full accuracy pass too, but see the note at the bottom of this section |
 
 ### Measured numbers (dev Mac M-series CPU, real OpenVoice V2 weights — full detail in **[PRODUCT_SPEC §4.1](docs/PRODUCT_SPEC.md)**)
