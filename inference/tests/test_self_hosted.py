@@ -21,6 +21,7 @@ from app.backends.self_hosted import (
     _resample,
     pick_providers,
 )
+from app.tuning import TuneParams
 
 _FRAME_SAMPLES = 960  # 20ms @ 48kHz
 _FRAME_BYTES = _FRAME_SAMPLES * 2
@@ -399,3 +400,96 @@ async def test_missing_model_downloaded_from_s3(model_dir, monkeypatch):
     }
     peak = np.abs(np.frombuffer(b"".join(out), dtype=np.int16)).max()
     assert peak < 5000  # downloaded halver model ran
+
+
+# ----- fine-tune DSP hook (M10) ------------------------------------------------
+
+
+async def test_untuned_voice_get_tune_params_returns_identity_default(model_dir):
+    backend = _backend(model_dir)
+    assert backend.get_tune_params("identity") == TuneParams()
+    assert backend.get_tune_params("identity").is_identity
+
+
+async def test_tune_params_are_keyed_independently_per_model_id(model_dir):
+    backend = _backend(model_dir)
+    backend.set_tune_params("identity", TuneParams(pitch_offset=5.0))
+    backend.set_tune_params("halver", TuneParams(breathiness=0.5))
+    assert backend.get_tune_params("identity").pitch_offset == 5.0
+    assert backend.get_tune_params("identity").breathiness == 0.0  # untouched
+    assert backend.get_tune_params("halver").breathiness == 0.5
+    assert backend.get_tune_params("halver").pitch_offset == 0.0  # untouched
+
+
+async def test_tuned_stream_preserves_1to1_frame_cadence(model_dir):
+    """A tuned voice must emit exactly one output frame per input frame, same
+    as an untuned stream over identical input (app/dsp.py's length-preserving
+    invariant must hold through the full streaming path, not just in isolation
+    against the pure functions — see test_dsp.py for those).
+    """
+    backend = _backend(model_dir)
+    backend.set_tune_params(
+        "identity", TuneParams(pitch_offset=3.0, speed_factor=1.2, breathiness=0.3)
+    )
+    session = backend.open_session()
+    frames_in = 12  # 2 full blocks + 2 leftover frames drained by flush
+    out = []
+    for _ in range(frames_in):
+        out += await session.push(_frame(8000), 48000, "identity")
+    out += await session.flush()
+    assert len(out) == frames_in
+    assert all(len(f) == _FRAME_BYTES for f in out)
+
+
+async def test_tuned_stream_with_extreme_speed_factor_preserves_cadence(model_dir):
+    backend = _backend(model_dir)
+    backend.set_tune_params("identity", TuneParams(speed_factor=2.0))
+    session = backend.open_session()
+    out = []
+    for _ in range(10):
+        out += await session.push(_frame(8000), 48000, "identity")
+    out += await session.flush()
+    assert len(out) == 10
+    assert all(len(f) == _FRAME_BYTES for f in out)
+
+
+async def test_tuned_output_differs_from_untuned_for_identical_input(model_dir):
+    """Proves the DSP hook actually runs on the streaming path (not just
+    wired-but-inert): tuned output audio must differ from untuned, even
+    though the frame count matches exactly."""
+    plain = _backend(model_dir)
+    plain_session = plain.open_session()
+    out_plain = []
+    for _ in range(5):
+        out_plain += await plain_session.push(_frame(8000), 48000, "identity")
+
+    tuned = _backend(model_dir)
+    tuned.set_tune_params("identity", TuneParams(breathiness=1.0))
+    tuned_session = tuned.open_session()
+    out_tuned = []
+    for _ in range(5):
+        out_tuned += await tuned_session.push(_frame(8000), 48000, "identity")
+
+    assert b"".join(out_plain) != b"".join(out_tuned)
+
+
+async def test_tuning_explicit_identity_matches_never_tuned_output(model_dir):
+    """A voice explicitly tuned to the identity values must sound exactly like
+    a voice nobody has ever tuned — proves apply_tuning's is_identity
+    short-circuit (skips the DSP chain entirely) is not just an optimization
+    but also behaviorally transparent.
+    """
+    untuned = _backend(model_dir)
+    untuned_session = untuned.open_session()
+    out_untuned = []
+    for _ in range(5):
+        out_untuned += await untuned_session.push(_frame(8000), 48000, "identity")
+
+    explicit_identity = _backend(model_dir)
+    explicit_identity.set_tune_params("identity", TuneParams())
+    explicit_session = explicit_identity.open_session()
+    out_explicit = []
+    for _ in range(5):
+        out_explicit += await explicit_session.push(_frame(8000), 48000, "identity")
+
+    assert b"".join(out_untuned) == b"".join(out_explicit)
