@@ -37,6 +37,8 @@ import numpy as np
 import structlog
 
 from app.backends.base import BackendSession, InferenceBackend
+from app.dsp import apply_tuning
+from app.tuning import IDENTITY_TUNE_PARAMS, TuneParams
 
 log = structlog.get_logger(__name__)
 
@@ -157,6 +159,19 @@ class _SelfHostedSession(BackendSession):
         self._context = joined[-keep:] if keep else joined[:0]
 
         converted = self._seam_crossfade(converted, head, xfade, pad_final)
+        # Fine-tune DSP hook (M10): pitch/speed/breathiness, keyed by the same
+        # model_id already routing this stream to an ONNX model. Applied once
+        # per block (not per 20ms frame) and skipped entirely for an untuned
+        # voice (TuneParams().is_identity) — see app/tuning.py's module
+        # docstring for the full out-of-band wiring story.
+        tune = self._backend.get_tune_params(model_id)
+        if not tune.is_identity:
+            converted = apply_tuning(
+                converted,
+                pitch_offset=tune.pitch_offset,
+                speed_factor=tune.speed_factor,
+                breathiness=tune.breathiness,
+            )
         self._out += _float_to_pcm(converted)
         frame_bytes = int(self._sample_rate * self._backend.frame_ms / 1000) * 2
         frames: list[bytes] = []
@@ -247,12 +262,31 @@ class SelfHostedBackend(InferenceBackend):
         self._failed_at: dict[str, float] = {}
         self._failed_retry_s = 30.0
         self._id_cache_cap = 1024
+        # Fine-tune params (M10), keyed by the same model_id as the session
+        # cache above; see app/tuning.py for how POST /voices/{id}/tune fills
+        # this in. Same client-supplied-key bound as the other id-keyed caches.
+        self._tune_params: dict[str, TuneParams] = {}
         import onnxruntime as ort
 
         self.providers = pick_providers(device, ort.get_available_providers())
 
     def open_session(self) -> BackendSession:
         return _SelfHostedSession(self)
+
+    def set_tune_params(self, model_id: str, params: TuneParams) -> None:
+        """Store fine-tune knobs for ``model_id``; read by the next converted block."""
+        if len(self._tune_params) >= self._id_cache_cap and model_id not in self._tune_params:
+            self._tune_params.pop(next(iter(self._tune_params)))  # oldest insertion first
+        self._tune_params[model_id] = params
+
+    def get_tune_params(self, model_id: str) -> TuneParams:
+        """Fine-tune knobs for ``model_id``, or the shared identity default if never tuned.
+
+        The untuned case returns the module-level ``IDENTITY_TUNE_PARAMS``
+        singleton rather than a fresh allocation, so reading tuning once per
+        converted block costs nothing for a voice nobody has tuned.
+        """
+        return self._tune_params.get(model_id, IDENTITY_TUNE_PARAMS)
 
     def context_samples(self, sample_rate: int) -> int:
         return int(sample_rate * self._context_ms / 1000)

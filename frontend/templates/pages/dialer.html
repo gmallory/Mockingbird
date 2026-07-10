@@ -23,6 +23,15 @@
     <span id="call-time" class="rec-time"></span>
   </div>
 
+  <div class="controls call-controls">
+    <button id="mute" class="btn btn--secondary" type="button" disabled>Mute</button>
+    <button id="hold" class="btn btn--secondary" type="button" disabled>Hold</button>
+    <label class="volume-control">
+      Volume
+      <input id="volume" class="volume-slider" type="range" min="0" max="100" value="100" disabled />
+    </label>
+  </div>
+
   <div class="metric">
     <span class="metric__label">Mic level</span>
     <div class="meter"><div id="in-level" class="meter__fill"></div></div>
@@ -57,11 +66,47 @@
   const outLevel = document.getElementById("out-level");
   const statusEl = document.getElementById("status");
   const callList = document.getElementById("call-list");
+  const muteBtn = document.getElementById("mute");
+  const holdBtn = document.getElementById("hold");
+  const volumeSlider = document.getElementById("volume");
 
   const engine = new AudioEngine({ websocketUrl: WS_URL });
   let activeCall = null;
   let timer = null;
   let startedAt = 0;
+  let muted = false;
+  let onHold = false;
+
+  function resetCallControls() {
+    muted = false;
+    onHold = false;
+    muteBtn.disabled = true;
+    holdBtn.disabled = true;
+    muteBtn.textContent = "Mute";
+    holdBtn.textContent = "Hold";
+    muteBtn.classList.remove("btn--active");
+    holdBtn.classList.remove("btn--active");
+    volumeSlider.disabled = true;
+  }
+
+  muteBtn.addEventListener("click", () => {
+    muted = !muted;
+    engine.setMuted(muted);
+    muteBtn.textContent = muted ? "Unmute" : "Mute";
+    muteBtn.classList.toggle("btn--active", muted);
+  });
+
+  holdBtn.addEventListener("click", () => {
+    onHold = !onHold;
+    engine.setHold(onHold);
+    holdBtn.textContent = onHold ? "Resume" : "Hold";
+    holdBtn.classList.toggle("btn--active", onHold);
+    setStatus(onHold ? "Call on hold — neither side can hear the other." : "Resumed.");
+  });
+
+  volumeSlider.addEventListener("input", () => {
+    engine.setVolume(Number(volumeSlider.value) / 100);
+  });
 
   const setStatus = (msg) => { statusEl.textContent = msg; };
   const setBadge = (text, ok) => {
@@ -179,6 +224,7 @@
     activeCall = null;
     callBtn.disabled = false;
     hangupBtn.disabled = true;
+    resetCallControls();
     setBadge("idle", false);
     setStatus(msg);
     await loadHistory();
@@ -188,6 +234,9 @@
     setBadge("in call", true);
     setStatus("Connected — the callee hears your transformed voice.");
     hangupBtn.disabled = false;
+    muteBtn.disabled = false;
+    holdBtn.disabled = false;
+    volumeSlider.disabled = false;
     startedAt = performance.now();
     timer = setInterval(() => {
       callTime.textContent = ((performance.now() - startedAt) / 1000).toFixed(0) + "s";

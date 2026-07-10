@@ -24,6 +24,7 @@ from app.config import settings
 from app.db.session import engine
 from app.logging import configure_logging
 from app.rate_limit import RateLimiter
+from app.settings import router as settings_router
 from app.training import router as training_router
 from app.voices import router as voices_router
 from app.websocket.auth import resolve_ws_auth
@@ -62,6 +63,7 @@ app.include_router(auth_router)
 app.include_router(voices_router)
 app.include_router(calls_router)
 app.include_router(training_router)
+app.include_router(settings_router)
 
 
 async def _check_db() -> bool:

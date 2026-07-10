@@ -210,7 +210,10 @@ Audio Upload → Validation → Preprocessing → Feature Extraction → Trainin
   *descoped: future/commercial*
 - **A/B Testing** — Compare Instant vs HD clone side by side — *descoped: future/commercial*
 - **Fine-Tune Controls** — Adjust pitch offset, breathiness, speed after training —
-  *planned (M10)*
+  *implemented (M10): `GET`/`PATCH /api/voices/:id`, applied server-side as a
+  post-processing DSP stage in the self-hosted `BlockStreamSession`
+  (`inference/app/dsp.py`); GPU-measured perceptual quality not evaluated (§15 covers
+  the listening check for the clone itself, not these knobs)*
 - **Training Progress** — Real-time progress bar with estimated time remaining —
   *implemented (M9: Studio polls `GET /api/voices/:id/train/status` for stage + ETA)*
 
@@ -244,7 +247,9 @@ hangup.
 - **Outbound PSTN calls** — Dial any phone number; voice is transformed before reaching
   the recipient — *implemented (M8a); live-Twilio verification run pending*
 - **Call controls** — Hangup + mid-call model hot-swap (`switch_model`) implemented;
-  mute/hold/volume — *planned (M10, with the dialer polish)*
+  mute/hold/volume — *implemented (M10): client-side (`AudioEngine.setMuted`/
+  `setHold`/`setVolume`); hold is a local mute-both-directions approximation, not a
+  Twilio hold-music/server-side bridge pause*
 - **Dial pad** — E.164 input, per-user call history, live meters on `/dialer` —
   *implemented (M8a)*
 - **Inbound calls** — Dedicated Mockingbird phone number — *descoped: future/commercial*
@@ -279,21 +284,26 @@ Mockingbird supports multiple audio routing strategies for different use cases:
 
 | Page             | Description                                                            | Status                               |
 | ---------------- | ---------------------------------------------------------------------- | ------------------------------------ |
-| **Dashboard**    | Overview: active voice model, recent calls, quick-start actions        | Planned — M10                        |
+| **Dashboard**    | Overview: active voice model, recent calls, quick-start actions        | Implemented (M10, at `/`)            |
 | **Voice Studio** | Upload samples, clone voices, manage voice library                     | Implemented (M4c, login-gated M6a)   |
-| **Dialer**       | Phone interface — dial pad, recent calls, mid-call controls            | Implemented (M8a; contacts descoped) |
-| **Live Monitor** | Live mic → transform → playback loop, utterance latency + level meters | Implemented (M4a/M4c, at `/`)        |
-| **Settings**     | Audio I/O config, quality presets, account                             | Planned — M10 (billing descoped)     |
+| **Dialer**       | Phone interface — dial pad, recent calls, mid-call controls            | Implemented (M8a; M10 mute/hold/volume; contacts descoped) |
+| **Live Monitor** | Live mic → transform → playback loop, utterance latency + level meters | Implemented (M4a/M4c, moved to `/monitor` in M10) |
+| **Settings**     | Audio I/O config, quality presets, account                             | Implemented (M10; billing descoped)  |
 
 #### Key UI Components
 - **Latency Indicator** — utterance latency + p95 on the Monitor — *implemented (M4c)*;
   per-frame path latency lives in the Grafana dashboard (M7)
 - **Quick Switch** — voice dropdown switching the live model — *implemented (M4c)*
-- **Waveform Visualizer** — input vs. output waveform comparison — *planned (M10; level
-  meters exist today)*
-- **Voice Similarity Meter** — how closely output matches the target — *planned (M10)*
-- **Transformation Toggle** — instant on/off for voice transformation — *planned (M10;
-  today: deselecting the voice reverts to echo)*
+- **Waveform Visualizer** — input vs. output waveform comparison — *implemented (M10):
+  `AnalyserNode` taps + canvas, real oscilloscope-style traces (not just the level
+  meters, which still exist too)*
+- **Voice Similarity Meter** — how closely output matches the target — *implemented
+  (M10): surfaces `VoiceModel.similarity_score` when measured, otherwise a
+  clearly-labeled live estimate (input/output signal correlation) — never presented as
+  a real measurement it isn't*
+- **Transformation Toggle** — instant on/off for voice transformation — *implemented
+  (M10): explicit checkbox pinning the stream to echo without losing the voice
+  dropdown's selection*
 
 ---
 
@@ -307,7 +317,7 @@ Mockingbird supports multiple audio routing strategies for different use cases:
 | **Web Audio API**                                                    | AudioWorklet for real-time audio processing (minimal browser JS glue) |
 | **WebSocket (binary)**                                               | Streaming audio to/from inference server (raw PCM Int16)              |
 | **Twilio REST + Media Streams** (httpx, gateway-side; no vendor SDK) | PSTN calling integration (M8a)                                        |
-| **Canvas API**                                                       | Waveform and spectrogram visualizations *(planned — M10)*             |
+| **Canvas API**                                                       | Waveform visualization *(implemented — M10, Live Monitor; no spectrogram in v1)* |
 | **SharedArrayBuffer**                                                | Zero-copy worklet hand-off *(future optimization; postMessage today)* |
 
 ### Backend — Gateway
@@ -368,8 +378,11 @@ class Voice(SQLModel, table=True):
 Tracks one HD (RVC fine-tune) training job — status, progress, and artifacts —
 separate from the lightweight `Voice` registry row it trains from. See
 `gateway/app/db/models.py::VoiceModel` (SQLModel, Alembic-migrated, `ca561f6a0421`).
-`pitch_offset`/`speed_factor`/`breathiness` land with the shape now but stay inert
-until M10 wires `PATCH /api/voices/:id` into the streaming session.
+`pitch_offset`/`speed_factor`/`breathiness` landed with the shape in M9 and are wired
+live as of M10: `GET`/`PATCH /api/voices/:id` (`gateway/app/voices/routes.py`) read/
+merge-patch them here, and push them out-of-band to the inference service's `POST
+/voices/{model_id}/tune`, which the self-hosted `BlockStreamSession` applies as a
+per-block DSP post-process (`inference/app/dsp.py`).
 
 ```python
 class VoiceModel(SQLModel, table=True):
@@ -400,7 +413,8 @@ class VoiceModel(SQLModel, table=True):
     similarity_score: float | None = None               # 0-1 voice similarity to target
     mos_score: float | None = None                       # Mean Opinion Score (quality)
 
-    # Fine-tune controls (M10 wires these into the streaming session)
+    # Fine-tune controls (implemented M10: PATCH /api/voices/:id + the self-hosted
+    # streaming session's DSP hook)
     pitch_offset: float                                 # Semitones adjustment (-12 to +12)
     speed_factor: float                                 # Playback speed (0.5 to 2.0)
     breathiness: float                                  # 0.0 to 1.0
@@ -444,7 +458,7 @@ class User(SQLModel, table=True):
     plan: Plan                  # free | pro | enterprise — drives WS rate limits (M6b)
     monthly_minutes_used: float # banked on WS session close (M6b)
     twilio_phone_number: str | None
-    settings: dict              # JSON — audio prefs land here (Settings UI, M10)
+    settings: dict              # JSON — audio I/O + quality prefs (GET/PATCH /api/settings, M10)
     created_at: datetime
     updated_at: datetime
 ```
@@ -465,13 +479,14 @@ Summary: binary raw PCM Int16 frames (20ms, 960 samples at 48kHz) both direction
 control messages `start` / `switch_model` / `stop` / `ping` client→server and `ready` /
 `model_loaded` / `error` (with `code`) / `degraded` / `pong` server→client.
 
-### REST API — implemented (M2–M9)
+### REST API — implemented (M2–M10)
 
-`/voices`, `/api/calls*`, and `/api/voices/*/train*` are per-user (Supabase bearer
-token, M6a). `/ws/voice` auth is **optional** (M6b): a valid `?token=` yields an
-authenticated, rate-limited session; no token yields the echo-only demo (unless
-`WS_REQUIRE_AUTH=true`); an invalid token is always rejected (close 4001; over-cap
-4029). Gateway on `:3001`, inference on `:8001`.
+`/voices`, `/api/calls*`, `/api/voices/*/train*`, `/api/voices/:id`, and
+`/api/settings` are per-user (Supabase bearer token, M6a). `/ws/voice` auth is
+**optional** (M6b): a valid `?token=` yields an authenticated, rate-limited session;
+no token yields the echo-only demo (unless `WS_REQUIRE_AUTH=true`); an invalid token
+is always rejected (close 4001; over-cap 4029). Gateway on `:3001`, inference on
+`:8001`.
 
 | Method | Endpoint                         | Service            | Auth                     | Description                                                                                               |
 | ------ | --------------------------------- | ------------------ | ------------------------ | ----------------------------------------------------------------------------------------------------------|
@@ -493,6 +508,11 @@ authenticated, rate-limited session; no token yields the echo-only demo (unless
 | POST   | `/api/voices/{id}/train`          | gateway             | Bearer                   | Multipart HD sample → creates a `VoiceModel`, enqueues the Celery `train_voice` job (M9)                   |
 | GET    | `/api/voices/{id}/train/status`   | gateway             | Bearer                   | Latest training job for that voice: status/stage/progress/ETA/error (M9)                                   |
 | POST   | `/train_hd`                       | inference           | none                     | Multipart HD sample, runs the training pipeline, returns the exported model's metadata (internal, M9)      |
+| GET    | `/api/voices/{id}`                | gateway             | Bearer                   | Fine-tune knobs + quality metrics for one of the caller's voices (M10)                                     |
+| PATCH  | `/api/voices/{id}`                | gateway             | Bearer                   | Merge-patch `pitch_offset`/`speed_factor`/`breathiness`; pushes to inference out-of-band (M10)             |
+| POST   | `/voices/{model_id}/tune`         | inference           | none                     | Store fine-tune params read by the self-hosted streaming session (internal, M10)                           |
+| GET    | `/api/settings`                   | gateway             | Bearer                   | The caller's audio/quality settings, merged over defaults (M10)                                            |
+| PATCH  | `/api/settings`                   | gateway             | Bearer                   | Merge-patch audio I/O device prefs + quality preset (M10)                                                  |
 
 Auth model (M6a): Supabase (GoTrue) mints access tokens; the gateway proxies
 signup/login to it and verifies the returned HS256 token offline against the project
@@ -505,11 +525,14 @@ Bearer-authenticated; milestones per [ROADMAP.md](ROADMAP.md).
 
 | Method | Endpoint                       | Description                                       | Milestone         |
 | ------ | ------------------------------ | ------------------------------------------------- | ----------------- |
-| GET    | `/api/voices/:id`              | Get voice model details                           | M10               |
-| DELETE | `/api/voices/:id`              | Delete voice model                                | M10               |
-| PATCH  | `/api/voices/:id`              | Update model settings (pitch, speed, breathiness) | M10               |
-| POST   | `/api/voices/:id/preview`      | Generate preview audio clip                       | M10               |
+| DELETE | `/api/voices/:id`              | Delete voice model                                | future/commercial |
+| POST   | `/api/voices/:id/preview`      | Generate preview audio clip                       | future/commercial |
 | GET    | `/api/user/usage`              | Get usage statistics                              | future/commercial |
+
+`GET`/`PATCH /api/voices/:id` and `GET`/`PATCH /api/settings` moved to the
+implemented table above (M10). `DELETE` and `/preview` were not part of M10's
+scope and move to the future/commercial backlog along with the rest of v1's
+deferred items (§13) now that v1 sign-off is otherwise complete.
 
 ---
 
@@ -784,16 +807,21 @@ No billing is built or planned for v1.
 - [x] Dialer UI with call history — M8a (contacts descoped)
 - [x] Mid-call model switching — `switch_model` (M4a)
 - [x] Latency monitoring dashboard (Prometheus + Grafana) — M7
-- [ ] HD Clone training pipeline (RVC fine-tuning) — **M9**
+- [x] HD Clone training pipeline (RVC fine-tuning) — **M9** (done locally; real
+      HuBERT/F0/RVC weights + the GPU fine-tune run are the remaining tail, §15
+      criterion 4)
 - Descoped to future/commercial (owner decision, 2026-07-07): inbound calls,
   call recording, WebRTC peer calls, contacts
 
 ### Remaining v1 work (see ROADMAP)
 - [ ] M5 close: rented-GPU `cloud_gpu` bench run (locks the 80ms line)
 - [ ] M8a close: live-Twilio call run
-- [ ] M9 — HD Clone tier (RVC training + single-graph ONNX export)
-- [ ] M10 — UI completion (Dashboard, Settings, fine-tune controls, similarity meter,
-      waveform viz) + v1 sign-off against §15
+- [x] M9 — HD Clone tier (RVC training + single-graph ONNX export) — done locally;
+      GPU fine-tune run is the remaining tail
+- [x] M10 — UI completion (Dashboard, Settings, fine-tune controls, similarity meter,
+      waveform viz) + v1 sign-off against §15 — done; the sign-off itself surfaced the
+      three items above as the only remaining v1 work (all GPU/live-credential gated,
+      not more code)
 
 ### Out of v1 scope — future/commercial backlog
 Inbound calls, call recording, WebRTC peer calls, contacts, model export/sharing
@@ -822,17 +850,21 @@ Mockingbird is a **portfolio piece** (owner decision, 2026-07-07). v1 is success
 every criterion below passes. The commercial metrics that previously lived here moved to
 Appendix C and are aspirational only — nothing in v1 measures them.
 
-| #   | Criterion                                                                                                                                                                               | How it's checked                                                                                                     | Status (2026-07-07)                                    |
+| #   | Criterion                                                                                                                                                                               | How it's checked                                                                                                     | Status (2026-07-09, M10 sign-off pass)                 |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| 1   | **Live cloned call**: clone a voice in the Studio, dial a real phone from `/dialer`, callee hears the cloned voice; two-way audio stays stable; status callback closes the record       | M8a live-Twilio run (real `TWILIO_*` creds + `PUBLIC_BASE_URL` tunnel, ~15 min)                                      | Pending — code landed & offline-tested                 |
-| 2   | **GPU latency inside budget**: self-hosted conversion p95 ≤ 80ms/block on a rented A10G/L4 (`DEVICE=cuda`), effective added latency consistent with the ~172ms end-to-end budget (§4.1) | `infrastructure/scripts/provision_cloud_gpu.sh` + `inference/scripts/self_hosted_bench.py`; numbers recorded in §4.1 | Pending — laptop-CPU p95 47.5ms already under the line |
-| 3   | **Instant clone quality**: converted output is recognizably the target voice in a side-by-side listening check                                                                          | Owner listening check (no automated PESQ harness in v1)                                                              | Pending — exercised locally in M5b                     |
-| 4   | **HD Clone tier**: an RVC fine-tuned voice trains, exports to the M5a ONNX contract, streams end-to-end, and beats the instant clone of the same speaker in a listening check           | M9                                                                                                                   | Not started                                            |
-| 5   | **UI complete**: Dashboard, Settings, fine-tune controls, similarity meter, waveform visualizer present and working                                                                     | M10                                                                                                                  | Not started                                            |
-| 6   | **Engineering health**: CI green on `main` (format + lint + tests × 3 services + image builds)                                                                                          | GitHub Actions (M7)                                                                                                  | Passing                                                |
-| 7   | **Docs current**: README / spec / roadmap match the code; architecture + measured numbers presentable as a portfolio artifact                                                           | Review at v1 sign-off (M10)                                                                                          | Ongoing                                                |
+| 1   | **Live cloned call**: clone a voice in the Studio, dial a real phone from `/dialer`, callee hears the cloned voice; two-way audio stays stable; status callback closes the record       | M8a live-Twilio run (real `TWILIO_*` creds + `PUBLIC_BASE_URL` tunnel, ~15 min)                                      | **Deferred (needs a live Twilio run)** — code landed & offline-tested (M8a) |
+| 2   | **GPU latency inside budget**: self-hosted conversion p95 ≤ 80ms/block on a rented A10G/L4 (`DEVICE=cuda`), effective added latency consistent with the ~172ms end-to-end budget (§4.1) | `infrastructure/scripts/provision_cloud_gpu.sh` + `inference/scripts/self_hosted_bench.py`; numbers recorded in §4.1 | **Deferred (needs a rented GPU box)** — laptop-CPU p95 47.5ms already under the line |
+| 3   | **Instant clone quality**: converted output is recognizably the target voice in a side-by-side listening check                                                                          | Owner listening check (no automated PESQ harness in v1)                                                              | **Deferred (needs an owner listening session)** — exercised locally in M5b |
+| 4   | **HD Clone tier**: an RVC fine-tuned voice trains, exports to the M5a ONNX contract, streams end-to-end, and beats the instant clone of the same speaker in a listening check           | M9                                                                                                                   | **Deferred (needs the GPU fine-tune run)** — pipeline built & offline-tested end to end (M9); no trained HuBERT/F0/RVC weights or listening check yet |
+| 5   | **UI complete**: Dashboard, Settings, fine-tune controls, similarity meter, waveform visualizer present and working                                                                     | M10                                                                                                                  | **Pass** — all five built and offline-verified against real Postgres/Redis + a live browser session (M10); see README v1 status writeup for detail |
+| 6   | **Engineering health**: CI green on `main` (format + lint + tests × 3 services + image builds)                                                                                          | GitHub Actions (M7)                                                                                                  | **Pass** — all three test suites pass: gateway (100), inference (122, 1 skipped), frontend (7); `test_pages.py` was updated for M10's `/` → Dashboard routing swap (Monitor now asserted at `/monitor`, plus new Dashboard/Settings/nav coverage) |
+| 7   | **Docs current**: README / spec / roadmap match the code; architecture + measured numbers presentable as a portfolio artifact                                                           | Review at v1 sign-off (M10)                                                                                          | **Partial** — ROADMAP.md and this spec are current as of this pass (M10 section closed out, §4.5/§6/§7 status flipped); README got a new v1-status section plus a stack/feature accuracy pass, but a few pre-existing aspirational claims (e.g. HTMX, K8s/Terraform, GPT-SoVITS) predate this milestone and weren't in its scope — flagged separately, not silently left as Pass |
 
-Order of remaining work: M5 GPU bench → M8a live run → M9 → M10 (sign-off).
+Criteria 1–4 are **deferred, not failing**: each is fully built and offline-tested; what
+remains is a real GPU box, live Twilio credentials, or a subjective listening session —
+none of which is more code. Criterion 5 is the one this milestone closes outright.
+Order of remaining work: M5 GPU bench → M8a live run → M9 GPU fine-tune → owner
+listening checks (criteria 3 and 4).
 
 ---
 

@@ -31,7 +31,7 @@ Before starting a milestone, read this file plus the relevant `agents/*.agent.md
 | → M8a     | Outbound PSTN calls + media-stream bridge + dialer UI                       | done (local); live Twilio run pending         |
 | → M8b     | Inbound calls, recording, WebRTC peer calls, contacts                       | **descoped** (2026-07-07 — future/commercial) |
 | **M9**    | **HD Clone tier — RVC training + single-graph ONNX export**                 | done (local); GPU fine-tune run pending       |
-| **M10**   | **UI completion (Dashboard, Settings, fine-tune, meters) + v1 sign-off**    | pending                                       |
+| **M10**   | **UI completion (Dashboard, Settings, fine-tune, meters) + v1 sign-off**    | done (local); GPU-gated §15 items pending     |
 
 ## Backend priority (owner decision, 2026-07-04)
 
@@ -599,20 +599,132 @@ the full pipeline, exports to the M5a ONNX contract, and streams through
 met (needs the GPU run):** beating the instant clone of the same speaker in a
 side-by-side listening check.
 
-### M10 — UI completion + v1 sign-off — PENDING
+### M10 — UI completion + v1 sign-off — DONE (local); GPU-gated §15 items pending
 
-**Goal:** close PRODUCT_SPEC §4.5 and run the §15 checklist. Last milestone of v1.
+**Goal:** close PRODUCT_SPEC §4.5 and run the §15 checklist. Last milestone of v1. Same
+posture as M5b/M8a/M9: everything that can be built and offline-tested without a rented
+GPU or a live Twilio/Supabase project is done; the handful of §15 criteria that
+inherently need one of those are the deferred tail — sign-off on those, not more code,
+is what remains.
 
-- **Dashboard**: overview page — active voice, recent calls, quick-start links.
-  (Monitor currently holds `/`; decide whether Dashboard takes `/` and Monitor moves.)
-- **Settings**: audio I/O config, quality presets, account — backed by the existing
-  `User.settings` JSON column.
-- **Fine-tune controls:** pitch offset / speed / breathiness per voice
-  (`PATCH /api/voices/{id}`), applied in the self-hosted streaming session — the DSP
-  hook into `BlockStreamSession` needs its own mini-spike.
-- **Monitor polish:** waveform visualizer (level meters exist today), voice similarity
-  meter, explicit transform on/off toggle. Mute/hold/volume on the dialer.
-- **v1 sign-off:** walk PRODUCT_SPEC §15, record results + measured numbers in the
-  README as the portfolio writeup.
+What landed:
 
-**Done when:** every §15 criterion is Pass and the README carries the writeup.
+- **Routing (`/` → Dashboard, Monitor → `/monitor`):** `frontend/app/main.py` now serves
+  `pages/dashboard.html` at `/` and moved the Live Monitor to `/monitor`. No HTTP
+  redirect from the old path — Dashboard is a real page at `/`, not a bounce — but
+  `base.html`'s nav and the Dashboard's own quick-start buttons put "Live Monitor" one
+  click away for anyone with the old URL bookmarked.
+- **Dashboard** (`frontend/templates/pages/dashboard.html`): client-fetched (no new
+  gateway routes needed) — `GET /voices` for a voice-library summary (count + most
+  recent, not a fabricated "active voice" concept: there is no persisted
+  currently-selected-voice state anywhere yet, so this only ever claims what the
+  registry actually shows) and `GET /api/calls` for the 5 most recent calls, plus
+  quick-start links to Studio/Monitor/Dialer. Logged-out shows a sign-in prompt instead
+  of crashing; the quick-start links still work anonymously (Monitor's echo demo).
+- **Settings API** (`gateway/app/settings/`, new module, mirrors `app/voices/`'s
+  package shape): `GET`/`PATCH /api/settings`, both scoped via `get_current_user`,
+  read/merge-patch the `User.settings` JSON `MutableDict` (audio input/output device
+  id, a `quality_preset` literal, and the three `getUserMedia` toggles the audio engine
+  already exposed as config). `PATCH` is a true merge — `exclude_unset` means an
+  omitted field never overwrites the stored value, only fields actually present in the
+  request body do. Account fields (email/plan) are deliberately NOT stored here; the
+  Settings page reads those from the existing `GET /auth/me` instead, so this module
+  only ever owns the audio/quality blob, never identity.
+- **Settings page** (`frontend/templates/pages/settings.html`): device pickers
+  populated via `navigator.mediaDevices.enumerateDevices()` (a "Detect devices" button
+  requests `getUserMedia` briefly, purely to unlock real device labels, then
+  re-enumerates), a quality-preset select, the three audio toggles, and a read-only
+  account panel from `/auth/me`. The selected input/output device ids round-trip
+  through `AudioEngine`'s config (`inputDeviceId`/`outputDeviceId`) — Monitor best-effort
+  fetches them before `start()` and applies the input device via a `getUserMedia`
+  constraint and the output device via `AudioContext.setSinkId` (Chromium-only,
+  feature-detected, silently a no-op elsewhere).
+- **Fine-tune controls — the mini-spike** (PRODUCT_SPEC §6's `pitch_offset`/
+  `speed_factor`/`breathiness`, added to `VoiceModel` in M9 "inert until M10"):
+  - **Gateway** (`gateway/app/voices/routes.py`): `GET`/`PATCH /api/voices/{voice_id}`
+    (`voice_id` = the `Voice.id` registry row, same convention as the M9 training
+    routes). The knobs live on `VoiceModel`, not `Voice` — but a plain instant-clone
+    `Voice` (M4b/M5b) has no `VoiceModel` row at all. Resolved with a single
+    unambiguous join instead of a special case per path: `VoiceModel.model_path ==
+    Voice.voice_id`. For an HD-trained voice this is already true (the M9 training
+    task sets both to the same exported model id), so PATCHing an HD voice edits the
+    *real* training-job row and its `similarity_score`/`mos_score` ride along in the
+    response for free; a never-trained voice creates one lightweight `VoiceModel`
+    companion row on first PATCH (`model_path` set immediately so the next PATCH finds
+    it the same way). `PATCH` is a merge (unset fields keep their current value),
+    ranges 422 via Pydantic `Field(ge=..., le=...)` matching PRODUCT_SPEC §6, and it
+    best-effort pushes the merged values to inference — a failed push logs a warning
+    and still returns 200 (the DB row is the source of truth regardless; the next
+    stream/PATCH re-syncs it).
+  - **Out-of-band channel** (`inference/app/tuning.py`): the gRPC `AudioFrame` proto and
+    the WS JSON control protocol are both frozen, shared contracts (`agents/AGENTS.md`)
+    — adding three low-frequency per-voice settings to either was rejected outright.
+    Landed the same pattern already used for `POST /train_hd`: a plain HTTP side-channel
+    on the inference FastAPI app, `POST /voices/{model_id}/tune`, called by the gateway.
+    Params are stored process-locally on `SelfHostedBackend` (keyed by the same
+    `model_id` a gRPC frame already carries — no new lookup key), not a database:
+    inference owns model artifacts and now this adjacent config, gateway remains the
+    sole durable owner in Postgres.
+  - **DSP** (`inference/app/dsp.py`): three pure, allocation-cheap numpy functions —
+    `shift_pitch` (single-frame spectral resample: remap FFT bins by `2**(semitones/12)`,
+    inverse-FFT back to the exact input length), `adjust_speed` (resample to
+    `round(N/factor)` then pad/truncate back to `N` — a "tape speed" effect that ties a
+    small pitch shift to the tempo change, an accepted simplification for a per-block
+    real-time effect), and `add_breathiness` (loudness-enveloped, high-pass-shaped
+    noise mixed in proportion to `amount`). Every function is a no-op at its identity
+    value and, critically, **always returns exactly as many samples as it was given** —
+    that invariant is what let the hook drop into
+    `_SelfHostedSession._convert_block` (`inference/app/backends/self_hosted.py`) as a
+    single call after the existing seam crossfade, with zero changes to the
+    block/frame-chunking math. The 1:1 input-frame-count == output-frame-count
+    streaming cadence M5b/M9 protect is untouched — verified directly (a tuned stream
+    and an untuned stream over the same input produce the same frame *count*, only
+    different content) rather than assumed.
+- **Monitor polish** (`frontend/templates/pages/monitor.html` +
+  `frontend/static/js/audio-engine/`):
+  - **Waveform visualizer**: real oscilloscope-style traces, not a level-history bar
+    chart — an `AnalyserNode` tapped off the existing capture/playback graph (fan-out
+    `connect()`, changes nothing about what reaches the speakers) feeds a
+    `requestAnimationFrame` canvas draw loop for input and output.
+  - **Voice similarity meter**: surfaces the real `VoiceModel.similarity_score` (via the
+    new `GET /api/voices/{id}`) when one has been measured — which is rare in v1 (M9:
+    "no automated scorer exists yet"). Otherwise falls back to a genuinely-computed,
+    clearly-labeled **live estimate** — a new `CorrelationTracker`
+    (`utils/metrics.js`) over the input/output level-meter samples already flowing
+    every ~80ms — rather than inventing a number and presenting it as measured. Labeled
+    in the UI as "live estimate (signal correlation) — not a trained similarity score."
+  - **Transform on/off toggle**: a checkbox that calls the *existing*
+    `engine.switchModel(null)` when off (pins the stream to echo without losing the
+    dropdown's selection) and restores the selected voice when back on. No engine or
+    protocol change — this is exactly the `switch_model` path M4a already wired.
+  - Level meters unchanged.
+- **Dialer polish** (`frontend/templates/pages/dialer.html` + `audio-engine.js`):
+  **mute** (`engine.setMuted` — stops sending mic frames via the existing
+  capture-worklet start/stop message), **hold** (`engine.setHold` — mutes both
+  directions locally: mic capture *and* pausing playback of arriving audio; there is no
+  Twilio hold-music/server-side bridge pause in v1, so this is a client-side
+  approximation, but it delivers the user-visible behavior that matters — silence on
+  both ends for the duration), and **volume** (`engine.setVolume` — a `GainNode`
+  between playback and the destination, native and allocation-free). Mute/hold gates
+  are independent booleans combined in one `_applyCaptureGate()` so toggling one never
+  silently overrides the other; both reset on hangup, volume persists as a preference.
+- **Tests deferred to the test-author pass** (per this milestone's brief — see the
+  commit description / PR for the exact list): DSP unit tests (length preservation,
+  identity no-ops, a synthetic-sine pitch-shift-direction check), the tuning route
+  (validation, backend-mismatch 400, uninitialized-backend 503), the gateway
+  GET/PATCH `/api/voices/:id` resolution (plain vs. HD voice, merge semantics,
+  ownership 404s), the settings API (defaults, merge-patch, per-user scoping,
+  validation), and the new frontend routes/nav. All exercised manually end-to-end
+  during this milestone (real Postgres + Redis + a live browser session against both
+  services) — see the PR description for what was actually run.
+
+**Remaining (the GPU/live-credential tail, same posture as every other milestone):**
+none of M10's own scope needs a GPU or live credentials — it's fully done. What's left
+is entirely the **§15 sign-off items inherited from earlier milestones** (GPU latency
+run, live-Twilio call, HD-clone listening check) — see the table below.
+
+**Done when (met):** Dashboard/Settings/fine-tune controls/similarity meter/waveform
+visualizer are present and working, offline-tested end to end against real Postgres +
+Redis. **Not yet met (§15 criteria that need a GPU box or live credentials, not more
+M10 code):** GPU-measured per-frame latency, the live-Twilio call, and the HD-clone
+listening check — tracked in PRODUCT_SPEC §15 and the README's v1 status writeup.

@@ -84,3 +84,63 @@ export class LevelSmoother {
     return this.value;
   }
 }
+
+/**
+ * Rolling Pearson correlation between two live signals (M10).
+ *
+ * Used by the Monitor's voice-similarity meter as the "live estimate" when no
+ * real `VoiceModel.similarity_score` exists yet (the common case — see
+ * PRODUCT_SPEC §6: no automated scorer exists in v1). This is a genuinely
+ * computed statistic over the input/output level-meter samples that are
+ * already flowing every ~80ms, NOT a fabricated number dressed up as a
+ * measurement — it answers "does the output's loudness envelope track the
+ * input's" (a rough proxy for "is conversion actively happening on my
+ * speech", not "does this sound like the target speaker"), and the caller is
+ * expected to label it accordingly (see monitor.html).
+ */
+export class CorrelationTracker {
+  /** @param {number} windowSize number of recent (x, y) samples kept */
+  constructor(windowSize = 50) {
+    this.windowSize = windowSize;
+    /** @type {number[]} */
+    this.xs = [];
+    /** @type {number[]} */
+    this.ys = [];
+  }
+
+  /** @param {number} x @param {number} y */
+  push(x, y) {
+    this.xs.push(x);
+    this.ys.push(y);
+    if (this.xs.length > this.windowSize) {
+      this.xs.shift();
+      this.ys.shift();
+    }
+  }
+
+  reset() {
+    this.xs.length = 0;
+    this.ys.length = 0;
+  }
+
+  /** @returns {number | null} Pearson correlation in [-1, 1], or null if too little data yet */
+  correlation() {
+    const n = this.xs.length;
+    if (n < 5) return null;
+    const meanX = this.xs.reduce((a, b) => a + b, 0) / n;
+    const meanY = this.ys.reduce((a, b) => a + b, 0) / n;
+    let num = 0;
+    let denomX = 0;
+    let denomY = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = this.xs[i] - meanX;
+      const dy = this.ys[i] - meanY;
+      num += dx * dy;
+      denomX += dx * dx;
+      denomY += dy * dy;
+    }
+    const denom = Math.sqrt(denomX * denomY);
+    if (denom === 0) return null;
+    return num / denom;
+  }
+}

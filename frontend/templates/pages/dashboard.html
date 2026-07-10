@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Mockingbird{% endblock %}
+
+{% block content %}
+<section class="dashboard">
+  <header>
+    <h1>Mockingbird</h1>
+    <p class="subtitle">Real-time voice cloning for live conversations. Clone a voice, preview it live,
+      or place a transformed phone call.</p>
+  </header>
+
+  <div class="quick-start">
+    <a class="btn" href="/studio">Voice Studio</a>
+    <a class="btn" href="/monitor">Live Monitor</a>
+    <a class="btn" href="/dialer">Dialer</a>
+  </div>
+
+  <div id="signed-out-prompt" class="status" style="display:none">
+    <a href="/login">Sign in</a> to see your voice library and call history — the Live Monitor's
+    echo demo still works without an account.
+  </div>
+
+  <div id="signed-in-panels" style="display:none">
+    <h2 class="section-title">Your voices</h2>
+    <div id="voice-summary" class="status">Loading…</div>
+    <ul id="voice-list" class="voice-list"></ul>
+
+    <h2 class="section-title">Recent calls</h2>
+    <ul id="call-list" class="voice-list"><li class="muted">Loading…</li></ul>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+  import { isLoggedIn, authHeaders } from "/static/js/auth.js";
+
+  const GATEWAY = {{ public_gateway_url | tojson }};
+
+  const signedOutPrompt = document.getElementById("signed-out-prompt");
+  const signedInPanels = document.getElementById("signed-in-panels");
+  const voiceSummary = document.getElementById("voice-summary");
+  const voiceList = document.getElementById("voice-list");
+  const callList = document.getElementById("call-list");
+
+  const escapeHtml = (s) =>
+    String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+    );
+
+  async function api(path) {
+    const resp = await fetch(`${GATEWAY}${path}`, { headers: authHeaders() });
+    if (!resp.ok) throw new Error(`${path} ${resp.status}`);
+    return resp.json();
+  }
+
+  async function loadVoices() {
+    try {
+      const voices = await api("/voices");
+      if (!voices.length) {
+        voiceSummary.textContent = "No cloned voices yet — record one in the Studio.";
+        voiceList.innerHTML = "";
+        return;
+      }
+      // GET /voices lists oldest-first (see gateway/app/voices/routes.py); the
+      // most recently created one is the last element, not a fabricated
+      // "active" session concept -- there is no persisted "currently
+      // selected voice" yet, so this only ever claims what the registry
+      // actually shows.
+      const mostRecent = voices[voices.length - 1];
+      voiceSummary.textContent =
+        `${voices.length} voice${voices.length === 1 ? "" : "s"} in your library. ` +
+        `Most recent: "${mostRecent.label}".`;
+      voiceList.innerHTML = voices
+        .slice()
+        .reverse()
+        .slice(0, 5)
+        .map(
+          (v) =>
+            `<li><strong>${escapeHtml(v.label)}</strong> ` +
+            `<span class="muted">${escapeHtml(v.language)}</span></li>`,
+        )
+        .join("");
+    } catch (err) {
+      voiceSummary.textContent = "Could not load your voices: " + (err?.message || err);
+    }
+  }
+
+  async function loadCalls() {
+    try {
+      const calls = await api("/api/calls");
+      if (!calls.length) {
+        callList.innerHTML = '<li class="muted">No calls yet — place one from the Dialer.</li>';
+        return;
+      }
+      callList.innerHTML = calls
+        .slice(0, 5)
+        .map((c) => {
+          const when = new Date(c.started_at).toLocaleString();
+          const dur = c.duration_sec ? ` · ${Math.round(c.duration_sec)}s` : "";
+          return `<li><strong>${escapeHtml(c.phone_number)}</strong> ` +
+            `<span class="muted">${escapeHtml(c.status)} · ${escapeHtml(when)}${dur}</span></li>`;
+        })
+        .join("");
+    } catch (err) {
+      callList.innerHTML = `<li class="warn-note">Could not load call history: ${escapeHtml(String(err))}</li>`;
+    }
+  }
+
+  if (isLoggedIn()) {
+    signedInPanels.style.display = "";
+    loadVoices();
+    loadCalls();
+  } else {
+    signedOutPrompt.style.display = "";
+  }
+</script>
+{% endblock %}

@@ -5,9 +5,14 @@ wrapper carries one-shot uploads. The gateway ``POST /voices`` route proxies a
 recorded clip here, to the inference service, which owns the Cartesia key.
 ``train_hd`` (M9) is the HD-training equivalent, called synchronously from the
 Celery worker (``app/training/tasks.py``), which has no event loop to run an
-async client in. On any transport or HTTP error both raise
-:class:`InferenceHTTPError` so the caller returns a clean 502/failed row
-instead of leaking httpx internals.
+async client in. ``tune_voice`` (M10) is the fine-tune controls' out-of-band
+channel: ``PATCH /api/voices/{id}`` (``app/voices/routes.py``) calls it after
+persisting pitch/speed/breathiness on the ``VoiceModel`` row, so the
+self-hosted streaming session picks the new values up without the gRPC audio
+frame contract ever carrying them (see ``inference/app/tuning.py``'s module
+docstring for the full spike writeup). On any transport or HTTP error all
+three raise :class:`InferenceHTTPError` so the caller returns a clean
+502/failed row instead of leaking httpx internals.
 """
 
 import httpx
@@ -68,6 +73,42 @@ def train_hd(
     ) as client:
         try:
             resp = client.post("/train_hd", files=files, data=data)
+            resp.raise_for_status()
+            return resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise InferenceHTTPError(str(exc)) from exc
+
+
+async def tune_voice(
+    base_url: str,
+    model_id: str,
+    pitch_offset: float,
+    speed_factor: float,
+    breathiness: float,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict:
+    """POST fine-tune params to inference ``/voices/{model_id}/tune`` (M10).
+
+    Out-of-band channel for the pitch/speed/breathiness knobs: the gRPC audio
+    frame proto carries only ``pcm``/``sample_rate``/``model_id`` (see
+    ``agents/AGENTS.md``), so these values travel over this side HTTP call
+    instead — mirroring how model artifacts themselves are resolved out-of-
+    band from the streaming path. Short timeout (this is a small JSON body,
+    not an upload): a slow/unreachable inference service should fail fast so
+    the caller's best-effort push doesn't hang the PATCH response.
+    """
+    async with httpx.AsyncClient(
+        base_url=base_url, transport=transport, timeout=httpx.Timeout(10.0, connect=5.0)
+    ) as client:
+        try:
+            resp = await client.post(
+                f"/voices/{model_id}/tune",
+                json={
+                    "pitch_offset": pitch_offset,
+                    "speed_factor": speed_factor,
+                    "breathiness": breathiness,
+                },
+            )
             resp.raise_for_status()
             return resp.json()
         except (httpx.HTTPError, ValueError) as exc:
