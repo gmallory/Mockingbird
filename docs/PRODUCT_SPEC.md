@@ -483,7 +483,8 @@ control messages `start` / `switch_model` / `stop` / `ping` client→server and 
 
 `/voices`, `/api/calls*`, `/api/voices/*/train*`, `/api/voices/:id`, and
 `/api/settings` are per-user (Supabase bearer token, M6a). `/ws/voice` auth is
-**optional** (M6b): a valid `?token=` yields an authenticated, rate-limited session;
+**optional** (M6b): a valid token — offered as a `bearer.<jwt>` `Sec-WebSocket-Protocol`
+entry, never a query param — yields an authenticated, rate-limited session;
 no token yields the echo-only demo (unless `WS_REQUIRE_AUTH=true`); an invalid token
 is always rejected (close 4001; over-cap 4029). Gateway on `:3001`, inference on
 `:8001`.
@@ -492,7 +493,7 @@ is always rejected (close 4001; over-cap 4029). Gateway on `:3001`, inference on
 | ------ | --------------------------------- | ------------------ | ------------------------ | ----------------------------------------------------------------------------------------------------------|
 | GET    | `/healthz`                        | gateway, inference | none                     | Health incl. Postgres/Redis (gateway)                                                                      |
 | GET    | `/metrics`                        | gateway, inference | none                     | Prometheus exposition (M7)                                                                                 |
-| WS     | `/ws/voice`                       | gateway             | optional `?token=` (M6b) | Binary audio streaming (contract above); `join_call` routes output to a call bridge (M8a)                  |
+| WS     | `/ws/voice`                       | gateway             | optional `bearer.<jwt>` subprotocol (M6b) | Binary audio streaming (contract above); `join_call` routes output to a call bridge (M8a)                  |
 | WS     | `/ws/twilio/{call_id}`            | gateway             | per-call secret (M8a)    | Twilio Media Stream leg of an outbound call                                                                |
 | POST   | `/auth/signup`                    | gateway             | none                     | Proxy signup to Supabase (GoTrue); returns the session                                                     |
 | POST   | `/auth/login`                     | gateway             | none                     | Proxy password login to Supabase; returns the session                                                      |

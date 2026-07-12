@@ -93,14 +93,17 @@ async def voice_stream(
     auth: WsAuth,
     limiter: RateLimiter,
     timeout_s: float = 2.0,
+    subprotocol: str | None = None,
 ) -> None:
     # Accept first, then enforce. A WebSocket close only carries an app-defined
     # code (4001/4029) once the handshake has completed; closing *before* accept
     # would reach the browser as a generic 1006, and the worker couldn't tell a
     # terminal rejection from a flaky link (it would reconnect-storm instead of
     # stopping). The gate below runs before the receive loop, so nothing the
-    # client sends in the meantime is ever read or acted on.
-    await websocket.accept()
+    # client sends in the meantime is ever read or acted on. The accept echoes
+    # the negotiated subprotocol — browsers fail the handshake when they offered
+    # one and the server picks none.
+    await websocket.accept(subprotocol=subprotocol)
 
     # --- Auth + rate-limit gate (before any frame is processed) -------------
     if auth.outcome == "rejected":

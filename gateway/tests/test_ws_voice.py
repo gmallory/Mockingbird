@@ -36,6 +36,13 @@ def _mint(sub: str, *, aud: str = "authenticated", exp_delta: int = 3600) -> str
     return jwt.encode(payload, SECRET, algorithm="HS256")
 
 
+def _bearer(token: str) -> list[str]:
+    """Client side of the WS auth carrier: the token rides as a subprotocol
+    entry next to the app protocol name (never the query string, which leaks
+    into access/proxy logs)."""
+    return ["mockingbird", f"bearer.{token}"]
+
+
 @pytest.fixture
 def _free_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skip the DB plan lookup on the WS auth path (default everyone to FREE)."""
@@ -236,7 +243,8 @@ def test_ws_switch_model_acks(monkeypatch: pytest.MonkeyPatch, _free_plan) -> No
     monkeypatch.setattr(settings, "supabase_jwt_secret", SECRET)
     token = _mint(str(uuid4()))
     client = TestClient(app)
-    with client.websocket_connect(f"/ws/voice?token={token}") as ws:
+    with client.websocket_connect("/ws/voice", subprotocols=_bearer(token)) as ws:
+        assert ws.accepted_subprotocol == "mockingbird"  # never the bearer entry
         assert ws.receive_json()["type"] == "ready"
         ws.send_json({"type": "switch_model", "modelId": "abc-123"})
         assert ws.receive_json() == {"type": "model_loaded", "modelId": "abc-123"}
@@ -283,7 +291,20 @@ def test_ws_rejects_invalid_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "supabase_jwt_secret", SECRET)
     client = TestClient(app)
     with pytest.raises(WebSocketDisconnect) as ei:
-        with client.websocket_connect("/ws/voice?token=not-a-jwt") as ws:
+        with client.websocket_connect("/ws/voice", subprotocols=_bearer("not-a-jwt")) as ws:
+            ws.receive_text()
+    assert ei.value.code == 4001
+
+
+def test_ws_rejects_legacy_query_param_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The pre-hardening ?token= carrier leaked tokens into access/proxy logs, so
+    # it is rejected outright — even with a *valid* token, an authentication
+    # attempt is never silently downgraded to the anonymous demo.
+    monkeypatch.setattr(settings, "supabase_jwt_secret", SECRET)
+    token = _mint(str(uuid4()))
+    client = TestClient(app)
+    with pytest.raises(WebSocketDisconnect) as ei:
+        with client.websocket_connect(f"/ws/voice?token={token}") as ws:
             ws.receive_text()
     assert ei.value.code == 4001
 
@@ -294,7 +315,7 @@ def test_ws_authenticated_roundtrip(monkeypatch: pytest.MonkeyPatch, _free_plan)
     with _passthrough_inference() as addr:
         monkeypatch.setattr(settings, "inference_grpc_url", addr)
         client = TestClient(app)
-        with client.websocket_connect(f"/ws/voice?token={token}") as ws:
+        with client.websocket_connect("/ws/voice", subprotocols=_bearer(token)) as ws:
             assert ws.receive_json()["type"] == "ready"
             # Authenticated: a voice can be selected (ack, not the anon refusal).
             ws.send_json({"type": "switch_model", "modelId": "my-voice"})
@@ -314,7 +335,7 @@ def test_ws_authenticated_rate_limited(monkeypatch: pytest.MonkeyPatch, _free_pl
     token = _mint(str(uuid4()))
     client = TestClient(app)
     with pytest.raises(WebSocketDisconnect) as ei:
-        with client.websocket_connect(f"/ws/voice?token={token}") as ws:
+        with client.websocket_connect("/ws/voice", subprotocols=_bearer(token)) as ws:
             ws.receive_text()  # accepted then closed 4029, no `ready`
     assert ei.value.code == 4029
 
@@ -331,10 +352,10 @@ def test_ws_concurrency_enforced_end_to_end(monkeypatch: pytest.MonkeyPatch, _fr
     token = _mint(sub)
     try:
         with TestClient(app) as client:  # lifespan -> app.state.redis
-            with client.websocket_connect(f"/ws/voice?token={token}") as ws1:
+            with client.websocket_connect("/ws/voice", subprotocols=_bearer(token)) as ws1:
                 assert ws1.receive_json()["type"] == "ready"  # first holds the slot
                 with pytest.raises(WebSocketDisconnect) as ei:
-                    with client.websocket_connect(f"/ws/voice?token={token}") as ws2:
+                    with client.websocket_connect("/ws/voice", subprotocols=_bearer(token)) as ws2:
                         ws2.receive_text()  # second is over cap -> closed 4029
                 assert ei.value.code == 4029
     except redis.exceptions.RedisError as exc:

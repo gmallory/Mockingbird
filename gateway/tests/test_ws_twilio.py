@@ -114,7 +114,10 @@ def test_join_call_requires_auth_and_ownership(monkeypatch: pytest.MonkeyPatch, 
             assert reply["code"] == "auth_required"
 
         # Authenticated as a *different* user: indistinguishable from no call.
-        with client.websocket_connect(f"/ws/voice?token={_mint(str(uuid4()))}") as ws:
+        # (Token rides as a bearer.<jwt> subprotocol — the query param is rejected.)
+        with client.websocket_connect(
+            "/ws/voice", subprotocols=["mockingbird", f"bearer.{_mint(str(uuid4()))}"]
+        ) as ws:
             assert ws.receive_json()["type"] == "ready"
             ws.send_json({"type": "join_call", "callId": call_id})
             reply = ws.receive_json()
@@ -139,7 +142,7 @@ class _FakeWS:
         self.outbox: asyncio.Queue = asyncio.Queue()
         self.close_code: int | None = None
 
-    async def accept(self) -> None:
+    async def accept(self, subprotocol: str | None = None) -> None:
         pass
 
     async def receive(self) -> dict:
