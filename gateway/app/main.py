@@ -117,7 +117,7 @@ async def ws_voice(websocket: WebSocket) -> None:
     # or None (bare TestClient / no lifespan) in which case it fail-opens — the
     # anonymous demo needs no Redis.
     token, subprotocol = ws_token_from_subprotocols(websocket.headers.get("sec-websocket-protocol"))
-    if websocket.query_params.get("token"):
+    if "token" in websocket.query_params:
         # The legacy ?token= carrier is gone. Reject loudly — an authentication
         # *attempt* over a leaking carrier must not silently downgrade to the
         # anonymous demo (same principle as an invalid token).

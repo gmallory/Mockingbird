@@ -309,6 +309,30 @@ def test_ws_rejects_legacy_query_param_token(monkeypatch: pytest.MonkeyPatch) ->
     assert ei.value.code == 4001
 
 
+def test_ws_rejects_duplicate_query_param_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A duplicate ?token= key where the first occurrence is empty must not slip
+    # past a truthiness check on the first value — any `token` key present in
+    # the query string is the leaking legacy carrier and is rejected outright.
+    monkeypatch.setattr(settings, "supabase_jwt_secret", SECRET)
+    token = _mint(str(uuid4()))
+    client = TestClient(app)
+    with pytest.raises(WebSocketDisconnect) as ei:
+        with client.websocket_connect(f"/ws/voice?token=&token={token}") as ws:
+            ws.receive_text()
+    assert ei.value.code == 4001
+
+
+def test_ws_rejects_empty_bearer_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An offered-but-empty `bearer.` subprotocol entry is a malformed auth
+    # attempt, not the absence of one, and must not be silently downgraded to
+    # the anonymous echo demo even though auth is optional by default.
+    client = TestClient(app)
+    with pytest.raises(WebSocketDisconnect) as ei:
+        with client.websocket_connect("/ws/voice", subprotocols=["mockingbird", "bearer."]) as ws:
+            ws.receive_text()
+    assert ei.value.code == 4001
+
+
 def test_ws_authenticated_roundtrip(monkeypatch: pytest.MonkeyPatch, _free_plan) -> None:
     monkeypatch.setattr(settings, "supabase_jwt_secret", SECRET)
     token = _mint(str(uuid4()))

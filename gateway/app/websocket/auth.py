@@ -3,7 +3,10 @@
 ``/ws/voice`` authenticates from a ``bearer.<jwt>`` entry offered in the
 ``Sec-WebSocket-Protocol`` handshake header (the browser WebSocket API can't set
 arbitrary headers, but it *can* offer subprotocols — and unlike a ``?token=``
-query param, the header never lands in access or proxy logs). Auth is
+query param, the header does not land in the request *target*, so it is absent
+from the request-line logging most proxies and access logs do by default; an
+operator running header-level logging or APM capture must still redact it).
+Auth is
 **optional by default** so the anonymous echo demo keeps working; set
 ``WS_REQUIRE_AUTH=true`` to lock the socket down.
 
@@ -64,7 +67,7 @@ def ws_token_from_subprotocols(header: str | None) -> tuple[str | None, str | No
         None,
     )
     subprotocol = WS_SUBPROTOCOL if WS_SUBPROTOCOL in offered else None
-    return token or None, subprotocol
+    return token, subprotocol
 
 
 @dataclass
@@ -100,10 +103,15 @@ async def load_user_plan(user_id: UUID, session_factory=async_session) -> Plan: 
 
 async def resolve_ws_auth(token: str | None) -> WsAuth:
     """Classify a ``/ws/voice`` connection from its token (or absence of one)."""
-    if not token:
+    if token is None:
         if settings.ws_require_auth:
             return WsAuth(outcome="rejected", reason="authentication required")
         return WsAuth(outcome="anonymous")
+
+    if not token:
+        # An offered-but-empty `bearer.` entry is a malformed auth *attempt*,
+        # not the absence of one — never downgrade it to anonymous.
+        return WsAuth(outcome="rejected", reason="invalid or expired token")
 
     try:
         claims = verify_token(token)
