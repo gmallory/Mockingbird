@@ -360,7 +360,9 @@ What landed:
   token and `WS_REQUIRE_AUTH` off → echo-only demo), or `rejected` (bad token
   always, or missing token when the flag is on → the handler closes **4001**). A
   present-but-invalid token is never silently downgraded to anonymous. The token
-  rides in a `?token=<jwt>` query param (the browser can't set WS headers).
+  rides as a `bearer.<jwt>` `Sec-WebSocket-Protocol` entry (the browser can't set
+  arbitrary WS headers; hardened 2026-07-12 from the original `?token=` query
+  param, which leaked tokens into access/proxy logs and is now rejected with 4001).
   `load_user_plan` reads the plan off the connect path (one lookup), defaulting to
   FREE if Postgres is unreachable.
 - **Rate limiting** (`gateway/app/rate_limit/limiter.py`): `RateLimiter` over Redis
@@ -375,10 +377,11 @@ What landed:
   `accept()`, before `ready`; anonymous sessions are **echo-locked** (model id pinned
   to `""`, `switch_model` refused with `auth_required`) so a demo visitor can't drive
   conversion with someone else's voice id; slot released + duration banked in the
-  `finally`. `main.py` extracts the query token, resolves auth, and builds the
-  limiter from `app.state.redis` (or `None`).
+  `finally`. `main.py` extracts the token from the `Sec-WebSocket-Protocol`
+  header, resolves auth, and builds the limiter from `app.state.redis` (or `None`).
 - **Config**: `ws_require_auth` (env `WS_REQUIRE_AUTH`, default false), in `.env.example`.
-- **Browser**: `websocket-worker.js` appends `?token=` and treats 4001/4029 closes as
+- **Browser**: `websocket-worker.js` offers `["mockingbird", "bearer.<jwt>"]`
+  subprotocols and treats 4001/4029 closes as
   terminal (no reconnect-storm); `audio-engine.js` `start(modelId, token)` forwards
   the token and emits `authError` / `limited`; `monitor.html` passes `getToken()` and
   surfaces both (logged-out visitors still get the echo demo).
@@ -389,7 +392,7 @@ What landed:
   the lifespan, `load_user_plan` against Postgres). `uv run pytest` is green (48) with
   Redis + Postgres up.
 
-**Done when (met):** a valid `?token=` yields an authenticated, rate-limited session;
+**Done when (met):** a valid token yields an authenticated, rate-limited session;
 no token yields the echo-only demo (unless `WS_REQUIRE_AUTH=true` → 4001); an invalid
 token → 4001; over a plan's concurrency cap or monthly minutes → 4029; the browser
 stops retrying on those; a Redis outage degrades to unenforced rather than dropping.

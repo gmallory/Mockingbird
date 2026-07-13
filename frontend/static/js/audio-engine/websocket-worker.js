@@ -62,17 +62,17 @@ self.onmessage = (e) => {
   }
 };
 
-// Append the auth token as a query param when present (the browser can't set a
-// header on a WebSocket). No token -> anonymous echo-only session, which the
-// gateway still accepts by default.
-function wsUrl() {
-  if (!token) return url;
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}token=${encodeURIComponent(token)}`;
+// Offer the auth token as a `bearer.<jwt>` Sec-WebSocket-Protocol entry (the
+// browser can't set arbitrary WS headers, and a query-param token would leak
+// into access/proxy logs). The gateway echoes back the app protocol name. No
+// token -> anonymous echo-only session, which the gateway still accepts by
+// default.
+function wsProtocols() {
+  return token ? ["mockingbird", `bearer.${token}`] : ["mockingbird"];
 }
 
 function connect() {
-  ws = new WebSocket(wsUrl());
+  ws = new WebSocket(url, wsProtocols());
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {

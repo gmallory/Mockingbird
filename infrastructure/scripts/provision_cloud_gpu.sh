@@ -29,7 +29,16 @@ fi
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
 if ! command -v uv >/dev/null; then
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  # Pinned + checksum-verified installer (no blind `curl | sh`). To bump: set the
+  # new version, then refresh the hash with
+  #   curl -LsSf https://astral.sh/uv/<version>/install.sh | sha256sum
+  UV_VERSION="0.11.28"
+  UV_INSTALL_SHA256="b7b3fe80cad1142a2a5794050b7db7b3291d1bac1423b0732571dd9366e8ca8b"
+  installer="$(mktemp)"
+  curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" -o "$installer"
+  echo "${UV_INSTALL_SHA256}  ${installer}" | sha256sum -c -
+  sh "$installer"
+  rm -f "$installer"
   export PATH="$HOME/.local/bin:$PATH"
 fi
 

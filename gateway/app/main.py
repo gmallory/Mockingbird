@@ -27,7 +27,7 @@ from app.rate_limit import RateLimiter
 from app.settings import router as settings_router
 from app.training import router as training_router
 from app.voices import router as voices_router
-from app.websocket.auth import resolve_ws_auth
+from app.websocket.auth import WsAuth, resolve_ws_auth, ws_token_from_subprotocols
 from app.websocket.handler import voice_stream
 
 log = structlog.get_logger(__name__)
@@ -110,11 +110,20 @@ async def metrics() -> Response:
 
 @app.websocket("/ws/voice")
 async def ws_voice(websocket: WebSocket) -> None:
-    # Auth rides in the query string (the browser can't set WS headers). Classify
-    # before accepting; the handler enforces the outcome + per-user limits. The
-    # limiter shares the app's Redis client, or None (bare TestClient / no
-    # lifespan) in which case it fail-opens — the anonymous demo needs no Redis.
-    auth = await resolve_ws_auth(websocket.query_params.get("token"))
+    # Auth rides in the Sec-WebSocket-Protocol header as a `bearer.<jwt>` entry
+    # (the browser can't set arbitrary WS headers, and a query-param token would
+    # land in access/proxy logs). Classify before accepting; the handler enforces
+    # the outcome + per-user limits. The limiter shares the app's Redis client,
+    # or None (bare TestClient / no lifespan) in which case it fail-opens — the
+    # anonymous demo needs no Redis.
+    token, subprotocol = ws_token_from_subprotocols(websocket.headers.get("sec-websocket-protocol"))
+    if "token" in websocket.query_params:
+        # The legacy ?token= carrier is gone. Reject loudly — an authentication
+        # *attempt* over a leaking carrier must not silently downgrade to the
+        # anonymous demo (same principle as an invalid token).
+        auth = WsAuth(outcome="rejected", reason="pass the token as a bearer.<jwt> subprotocol")
+    else:
+        auth = await resolve_ws_auth(token)
     limiter = RateLimiter(getattr(websocket.app.state, "redis", None))
     await voice_stream(
         websocket,
@@ -122,6 +131,7 @@ async def ws_voice(websocket: WebSocket) -> None:
         auth=auth,
         limiter=limiter,
         timeout_s=settings.inference_timeout_ms / 1000,
+        subprotocol=subprotocol,
     )
 
 

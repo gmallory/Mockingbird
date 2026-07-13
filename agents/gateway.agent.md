@@ -71,7 +71,7 @@ Browsers (WebSocket clients)
 
 ```
 1. Client connects: wss://gateway.mockingbird.app/ws/voice
-2. Gateway validates JWT from query param or first message
+2. Gateway validates JWT offered as a `bearer.<jwt>` Sec-WebSocket-Protocol entry (query-param tokens rejected — they leak into logs)
 3. Client sends: { "type": "start", "modelId": "uuid", "sampleRate": 48000 }
 4. Gateway:
    a. Validates user has access to the model

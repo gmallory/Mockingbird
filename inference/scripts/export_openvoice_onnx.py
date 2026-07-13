@@ -19,6 +19,7 @@ Set SELF_HOSTED_MODEL_SAMPLE_RATE=22050 when serving these models.
 """
 
 import argparse
+import hashlib
 import sys
 from pathlib import Path
 
@@ -28,11 +29,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 HF_BASE = "https://huggingface.co/myshell-ai/OpenVoiceV2/resolve/main/converter"
 CACHE_DIR = Path.home() / ".cache" / "mockingbird" / "openvoice"
+# Pinned sha256 of the published artifacts: a checkpoint swapped upstream (or a
+# tampered download) fails loudly instead of exporting silently. If myshell-ai
+# ever republishes, recompute — the checkpoint hash is in its LFS pointer:
+#   curl -s https://huggingface.co/myshell-ai/OpenVoiceV2/raw/main/converter/checkpoint.pth
+ARTIFACT_SHA256 = {
+    "config.json": "9dfff60350b8c63f2c664efd92a61b2516efb22671466960f0e5dfebd881fa47",
+    "checkpoint.pth": "9652c27e92b6b2a91632590ac9962ef7ae2b712e5c5b7f4c34ec55ee2b37ab9e",
+}
 
 
-def _download(url: str, dest: Path) -> Path:
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while chunk := fh.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download(url: str, dest: Path, sha256: str) -> Path:
     if dest.exists() and dest.stat().st_size > 0:
-        return dest
+        if _sha256(dest) == sha256:
+            return dest
+        print(f"cached {dest} fails its checksum; re-downloading")
+        dest.unlink()
     dest.parent.mkdir(parents=True, exist_ok=True)
     print(f"downloading {url} -> {dest}")
     tmp = dest.with_suffix(dest.suffix + ".part")
@@ -41,6 +61,13 @@ def _download(url: str, dest: Path) -> Path:
         with open(tmp, "wb") as fh:
             for chunk in resp.iter_bytes(1 << 20):
                 fh.write(chunk)
+    actual = _sha256(tmp)
+    if actual != sha256:
+        tmp.unlink()
+        raise SystemExit(
+            f"{url}: sha256 mismatch (expected {sha256}, got {actual}) — upstream "
+            "changed or the download was tampered with; refusing to use it"
+        )
     tmp.rename(dest)
     return dest
 
@@ -89,15 +116,23 @@ def main() -> None:
     except ImportError as exc:
         raise SystemExit(f"torch export deps missing ({exc}); run: uv sync --group export") from exc
 
+    # Local --config/--checkpoint paths are deliberate operator overrides and
+    # skip the pin; the downloaded artifacts are always checksum-verified.
     config = (
         Path(args.config)
         if args.config
-        else _download(f"{HF_BASE}/config.json", CACHE_DIR / "config.json")
+        else _download(
+            f"{HF_BASE}/config.json", CACHE_DIR / "config.json", ARTIFACT_SHA256["config.json"]
+        )
     )
     checkpoint = (
         Path(args.checkpoint)
         if args.checkpoint
-        else _download(f"{HF_BASE}/checkpoint.pth", CACHE_DIR / "checkpoint.pth")
+        else _download(
+            f"{HF_BASE}/checkpoint.pth",
+            CACHE_DIR / "checkpoint.pth",
+            ARTIFACT_SHA256["checkpoint.pth"],
+        )
     )
 
     template_dir = Path(args.model_dir) / "openvoice"

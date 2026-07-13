@@ -13,10 +13,12 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 3001
 
-    # HTTP CORS origins (feeds CORSMiddleware only). "*" is fine for local dev.
+    # HTTP CORS origins (feeds CORSMiddleware only). Defaults to the local dev
+    # frontend; set ALLOWED_ORIGINS (JSON list, e.g. '["https://app.example.com"]')
+    # for any other deployment — never fall back to "*" outside a dev box.
     # Note: this does not enforce WebSocket Origin — that check arrives with
     # gateway auth in a later milestone.
-    allowed_origins: list[str] = ["*"]
+    allowed_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # Async Postgres DSN (asyncpg driver) matching infrastructure/docker-compose.yml.
     database_url: str = "postgresql+asyncpg://mockingbird:dev_password@localhost:5432/mockingbird"
@@ -77,7 +79,9 @@ class Settings(BaseSettings):
     enable_calling: bool = True  # env ENABLE_CALLING (feature flag)
 
     # === Realtime socket auth (M6b) ===
-    # /ws/voice takes its token from a ?token=<jwt> query param. Auth is optional
+    # /ws/voice takes its token from a `bearer.<jwt>` Sec-WebSocket-Protocol entry
+    # (never the query string — a ?token= would leak into access/proxy logs; a
+    # query-param token is rejected outright). Auth is optional
     # by default so the anonymous echo demo keeps working (no token -> echo-only,
     # never voice conversion); flip this on to reject any tokenless connection with
     # WS close 4001. An invalid/expired token is rejected regardless of this flag.

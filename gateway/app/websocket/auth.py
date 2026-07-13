@@ -1,16 +1,18 @@
 """WebSocket auth resolution (M6b).
 
-``/ws/voice`` authenticates from a ``?token=<jwt>`` query param (the browser can't
-set headers on a WebSocket, so the query string is the idiomatic carrier). Auth is
+``/ws/voice`` authenticates from a ``bearer.<jwt>`` entry offered in the
+``Sec-WebSocket-Protocol`` handshake header (the browser WebSocket API can't set
+arbitrary headers, but it *can* offer subprotocols — and unlike a ``?token=``
+query param, the header does not land in the request *target*, so it is absent
+from the request-line logging most proxies and access logs do by default; an
+operator running header-level logging or APM capture must still redact it).
+Auth is
 **optional by default** so the anonymous echo demo keeps working; set
 ``WS_REQUIRE_AUTH=true`` to lock the socket down.
 
-.. warning::
-   A query-string token lands in HTTP access logs and in any reverse proxy in
-   front of the socket, so redact the ``token`` param at those layers (the
-   browser WebSocket API offers no header carrier, so this is the tradeoff for
-   auth on the socket). This module itself logs only the rejection *reason*,
-   never the token.
+A token sent via the legacy ``?token=`` query param is rejected in ``main.py``
+(4001), never read and never silently downgraded to anonymous — that carrier
+leaks. This module itself logs only the rejection *reason*, never the token.
 
 Three outcomes, resolved *before* the socket is accepted:
 
@@ -41,6 +43,31 @@ from app.db.session import async_session
 log = structlog.get_logger(__name__)
 
 WsOutcome = Literal["authenticated", "anonymous", "rejected"]
+
+# The app subprotocol the browser offers (and the server echoes back) on
+# /ws/voice; the token rides alongside it as a second `bearer.<jwt>` entry.
+WS_SUBPROTOCOL = "mockingbird"
+_WS_BEARER_PREFIX = "bearer."
+
+
+def ws_token_from_subprotocols(header: str | None) -> tuple[str | None, str | None]:
+    """Extract ``(token, subprotocol_to_accept)`` from ``Sec-WebSocket-Protocol``.
+
+    The server must echo one *offered* subprotocol back in the handshake or
+    browsers fail the connection, so alongside the token this returns which
+    subprotocol to accept: ``mockingbird`` when offered, else ``None`` (bare
+    non-browser clients that offered nothing). The ``bearer.<jwt>`` entry is
+    never echoed — that would reflect the credential into a response header.
+    """
+    if not header:
+        return None, None
+    offered = [p.strip() for p in header.split(",") if p.strip()]
+    token = next(
+        (p.removeprefix(_WS_BEARER_PREFIX) for p in offered if p.startswith(_WS_BEARER_PREFIX)),
+        None,
+    )
+    subprotocol = WS_SUBPROTOCOL if WS_SUBPROTOCOL in offered else None
+    return token, subprotocol
 
 
 @dataclass
@@ -76,10 +103,15 @@ async def load_user_plan(user_id: UUID, session_factory=async_session) -> Plan: 
 
 async def resolve_ws_auth(token: str | None) -> WsAuth:
     """Classify a ``/ws/voice`` connection from its token (or absence of one)."""
-    if not token:
+    if token is None:
         if settings.ws_require_auth:
             return WsAuth(outcome="rejected", reason="authentication required")
         return WsAuth(outcome="anonymous")
+
+    if not token:
+        # An offered-but-empty `bearer.` entry is a malformed auth *attempt*,
+        # not the absence of one — never downgrade it to anonymous.
+        return WsAuth(outcome="rejected", reason="invalid or expired token")
 
     try:
         claims = verify_token(token)
