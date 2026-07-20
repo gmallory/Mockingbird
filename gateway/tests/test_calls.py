@@ -261,11 +261,14 @@ async def test_calls_scoped_per_user_and_hangup(monkeypatch: pytest.MonkeyPatch)
             # Hanging up again is a no-op, not an error.
             assert (await client.post(f"/api/calls/{record.id}/hangup")).status_code == 200
     finally:
-        async with env.factory() as session:
-            stored = await session.get(User, stranger.id)
-            if stored is not None:
-                await session.delete(stored)
-                await session.commit()
+        try:
+            async with env.factory() as session:
+                stored = await session.get(User, stranger.id)
+                if stored is not None:
+                    await session.delete(stored)
+                    await session.commit()
+        except Exception:  # noqa: BLE001 - cleanup after a skip has no schema
+            pass
         await env.teardown()
 
 
