@@ -341,17 +341,20 @@ async def test_start_training_404_for_missing_or_unowned_voice() -> None:
             )
             assert resp2.status_code == 404
     finally:
-        async with env.factory() as session:
-            # The voice row FKs to the user; delete it first or the user
-            # delete below violates fk_voice_user_id_user.
-            stored_voice = await session.get(Voice, strangers_voice.id)
-            if stored_voice is not None:
-                await session.delete(stored_voice)
-                await session.commit()
-            stored = await session.get(User, stranger.id)
-            if stored is not None:
-                await session.delete(stored)
-                await session.commit()
+        try:
+            async with env.factory() as session:
+                # The voice row FKs to the user; delete it first or the user
+                # delete below violates fk_voice_user_id_user.
+                stored_voice = await session.get(Voice, strangers_voice.id)
+                if stored_voice is not None:
+                    await session.delete(stored_voice)
+                    await session.commit()
+                stored = await session.get(User, stranger.id)
+                if stored is not None:
+                    await session.delete(stored)
+                    await session.commit()
+        except Exception:  # noqa: BLE001 - cleanup after a skip has no schema
+            pass
         await env.teardown()
 
 
@@ -501,11 +504,14 @@ async def test_training_status_404_for_missing_voice_or_non_owner() -> None:
             resp3 = await client.get(f"/api/voices/{voice.id}/train/status")
             assert resp3.status_code == 404
     finally:
-        async with env.factory() as session:
-            stored = await session.get(User, stranger.id)
-            if stored is not None:
-                await session.delete(stored)
-                await session.commit()
+        try:
+            async with env.factory() as session:
+                stored = await session.get(User, stranger.id)
+                if stored is not None:
+                    await session.delete(stored)
+                    await session.commit()
+        except Exception:  # noqa: BLE001 - cleanup after a skip has no schema
+            pass
         await env.teardown()
 
 
@@ -670,17 +676,20 @@ async def test_train_voice_task_voice_id_collision_rolls_back() -> None:
             assert len(rows) == 1, "the task's additive insert must not have survived the rollback"
             assert rows[0].user_id == other_owner.id
     finally:
-        async with env.factory() as session:
-            # The colliding voice row FKs to other_owner; delete it first or
-            # the user delete below violates fk_voice_user_id_user.
-            stored_voice = await session.get(Voice, colliding.id)
-            if stored_voice is not None:
-                await session.delete(stored_voice)
-                await session.commit()
-            stored = await session.get(User, other_owner.id)
-            if stored is not None:
-                await session.delete(stored)
-                await session.commit()
+        try:
+            async with env.factory() as session:
+                # The colliding voice row FKs to other_owner; delete it first or
+                # the user delete below violates fk_voice_user_id_user.
+                stored_voice = await session.get(Voice, colliding.id)
+                if stored_voice is not None:
+                    await session.delete(stored_voice)
+                    await session.commit()
+                stored = await session.get(User, other_owner.id)
+                if stored is not None:
+                    await session.delete(stored)
+                    await session.commit()
+        except Exception:  # noqa: BLE001 - cleanup after a skip has no schema
+            pass
         await env.teardown()
 
 

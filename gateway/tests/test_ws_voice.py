@@ -369,21 +369,31 @@ def test_ws_concurrency_enforced_end_to_end(monkeypatch: pytest.MonkeyPatch, _fr
     # real client and main.ws_voice builds a Redis-backed RateLimiter (not the
     # fail-open None used elsewhere). FREE = 1 concurrent, so a second live socket
     # for the same user is closed 4029. Skips when Redis is down.
+    #
+    # The limiter itself fails open on a connect error (logs a warning, admits
+    # the session) rather than raising, so a down Redis wouldn't surface as
+    # WebSocketDisconnect(4029) here - it'd surface as the assertion below
+    # failing. Probe reachability up front instead of relying on that.
     import redis
+
+    client = redis.Redis.from_url(settings.redis_url)
+    try:
+        client.ping()
+    except redis.exceptions.RedisError as exc:
+        pytest.skip(f"Redis not reachable: {exc}")
+    finally:
+        client.close()
 
     monkeypatch.setattr(settings, "supabase_jwt_secret", SECRET)
     sub = str(uuid4())
     token = _mint(sub)
-    try:
-        with TestClient(app) as client:  # lifespan -> app.state.redis
-            with client.websocket_connect("/ws/voice", subprotocols=_bearer(token)) as ws1:
-                assert ws1.receive_json()["type"] == "ready"  # first holds the slot
-                with pytest.raises(WebSocketDisconnect) as ei:
-                    with client.websocket_connect("/ws/voice", subprotocols=_bearer(token)) as ws2:
-                        ws2.receive_text()  # second is over cap -> closed 4029
-                assert ei.value.code == 4029
-    except redis.exceptions.RedisError as exc:
-        pytest.skip(f"Redis not reachable: {exc}")
+    with TestClient(app) as client:  # lifespan -> app.state.redis
+        with client.websocket_connect("/ws/voice", subprotocols=_bearer(token)) as ws1:
+            assert ws1.receive_json()["type"] == "ready"  # first holds the slot
+            with pytest.raises(WebSocketDisconnect) as ei:
+                with client.websocket_connect("/ws/voice", subprotocols=_bearer(token)) as ws2:
+                    ws2.receive_text()  # second is over cap -> closed 4029
+            assert ei.value.code == 4029
 
 
 async def test_load_user_plan_reads_plan() -> None:
